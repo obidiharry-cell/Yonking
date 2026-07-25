@@ -222,7 +222,6 @@ if st.button("🔄 Run Full YonKing Analysis"):
                 "Buy Conf": f"{buy_conf}%", "Sell Conf": f"{sell_conf}%", "DECISION": decision
             })
 
-    # Now add Gold
     with st.spinner("Analyzing XAU/USD..."):
         gold_raw = fetch_gold_history()
         gold_featured = build_features(gold_raw, False)
@@ -252,6 +251,42 @@ if st.button("🔄 Run Full YonKing Analysis"):
         })
 
     st.dataframe(pd.DataFrame(results_table), use_container_width=True)
+
+    st.divider()
+    st.subheader("📊 Live Charts")
+
+    tradingview_symbols = {
+        "USD/JPY": "FX:USDJPY",
+        "GBP/USD": "FX:GBPUSD",
+        "USD/CAD": "FX:USDCAD",
+        "XAU/USD": "OANDA:XAUUSD"
+    }
+
+    selected_pair = st.selectbox("Select a pair to view its live chart:", list(tradingview_symbols.keys()))
+    tv_symbol = tradingview_symbols[selected_pair]
+
+    tradingview_widget = f"""
+    <div class="tradingview-widget-container">
+      <div id="tradingview_chart"></div>
+      <script src="https://s3.tradingview.com/tv.js"></script>
+      <script type="text/javascript">
+      new TradingView.widget({{
+        "width": "100%",
+        "height": 500,
+        "symbol": "{tv_symbol}",
+        "interval": "60",
+        "timezone": "Etc/UTC",
+        "theme": "dark",
+        "style": "1",
+        "locale": "en",
+        "toolbar_bg": "#f1f3f6",
+        "enable_publishing": false,
+        "container_id": "tradingview_chart"
+      }});
+      </script>
+    </div>
+    """
+    st.components.v1.html(tradingview_widget, height=520)
 
     with st.expander("Headlines used for news sentiment"):
         for h in headlines:
