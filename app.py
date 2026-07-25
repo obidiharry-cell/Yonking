@@ -29,7 +29,18 @@ def fetch_daily_history(from_sym, to_sym):
     df = pd.DataFrame(rows)
     return df.sort_values("date").reset_index(drop=True)
 
-def build_features(df):
+@st.cache_data(ttl=3600)
+def fetch_gold_history():
+    url = "https://www.alphavantage.co/query"
+    params = {"function": "GOLD_SILVER_HISTORY", "symbol": "GOLD", "interval": "daily", "apikey": ALPHA_KEY}
+    response = requests.get(url, params=params)
+    data = response.json()
+    records = data["data"]
+    rows = [{"date": e["date"], "close": float(e["price"])} for e in records]
+    df = pd.DataFrame(rows)
+    return df.sort_values("date").reset_index(drop=True)
+
+def build_features(df, has_ohlc=True):
     df = df.copy()
     df["next_close"] = df["close"].shift(-1)
     df["target"] = (df["next_close"] > df["close"]).astype(int)
@@ -44,8 +55,12 @@ def build_features(df):
     loss = -delta.where(delta < 0, 0)
     rs = gain.rolling(14).mean() / loss.rolling(14).mean()
     df["rsi"] = 100 - (100 / (1 + rs))
-    df["swing_high_20"] = df["high"].shift(1).rolling(20).max()
-    df["swing_low_20"] = df["low"].shift(1).rolling(20).min()
+    if has_ohlc:
+        df["swing_high_20"] = df["high"].shift(1).rolling(20).max()
+        df["swing_low_20"] = df["low"].shift(1).rolling(20).min()
+    else:
+        df["swing_high_20"] = df["close"].shift(1).rolling(20).max()
+        df["swing_low_20"] = df["close"].shift(1).rolling(20).min()
     df["dist_to_swing_high"] = (df["swing_high_20"] - df["close"]) / df["close"]
     df["dist_to_swing_low"] = (df["close"] - df["swing_low_20"]) / df["close"]
     def calc_slope(series):
@@ -139,7 +154,7 @@ def get_timeframe_direction(pair):
     results = {tf: get_tf_direction(fetch_intraday(symbol, tf)) for tf in ["4h", "1h", "30min", "15min"]}
     up = list(results.values()).count("UP")
     down = list(results.values()).count("DOWN")
-    return ("BUY" if up > down else ("SELL" if down > up else "NEUTRAL")), results
+    return "BUY" if up > down else ("SELL" if down > up else "NEUTRAL")
 
 @st.cache_data(ttl=21600)
 def get_cot_positioning(contract_name, dataset_url, field_prefix, suffix=""):
@@ -160,12 +175,15 @@ cot_contracts = {
     "XAU/USD": ("GOLD - COMMODITY EXCHANGE INC.", DISAGG_URL, "m_money_positions", "_all")
 }
 
-def get_pivot_direction(df):
+def get_pivot_direction(df, has_ohlc=True):
     y = df.iloc[-2]
-    pivot = (y["high"] + y["low"] + y["close"]) / 3
+    close = y["close"]
+    if has_ohlc:
+        high, low = y["high"], y["low"]
+    else:
+        high, low = close * 1.005, close * 0.995
+    pivot = (high + low + close) / 3
     return "BUY" if df["close"].iloc[-1] > pivot else "SELL"
-
-pairs_info = {"USD/JPY": ("USD", "JPY"), "GBP/USD": ("GBP", "USD"), "USD/CAD": ("USD", "CAD")}
 
 st.divider()
 if st.button("🔄 Run Full YonKing Analysis"):
@@ -173,17 +191,18 @@ if st.button("🔄 Run Full YonKing Analysis"):
     st.subheader(f"News Sentiment: {news_bias}")
 
     results_table = []
+    currency_pairs = {"USD/JPY": ("USD", "JPY"), "GBP/USD": ("GBP", "USD"), "USD/CAD": ("USD", "CAD")}
 
-    for pair, (fs, ts) in pairs_info.items():
+    for pair, (fs, ts) in currency_pairs.items():
         with st.spinner(f"Analyzing {pair}..."):
             raw_df = fetch_daily_history(fs, ts)
-            featured_df = build_features(raw_df)
+            featured_df = build_features(raw_df, True)
             win_rate, price_dir, current_price = analyze_price_model(featured_df)
             news_dir = get_news_direction(pair, news_bias)
-            tf_dir, tf_details = get_timeframe_direction(pair)
+            tf_dir = get_timeframe_direction(pair)
             contract, url, prefix, suffix = cot_contracts[pair]
             cot_dir = get_cot_positioning(contract, url, prefix, suffix)
-            pivot_dir = get_pivot_direction(raw_df)
+            pivot_dir = get_pivot_direction(raw_df, True)
 
             buy_score = sell_score = 0
             if price_dir == "BUY": buy_score += win_rate
@@ -202,6 +221,35 @@ if st.button("🔄 Run Full YonKing Analysis"):
                 "News": news_dir, "Timeframe": tf_dir, "COT": cot_dir, "Pivot": pivot_dir,
                 "Buy Conf": f"{buy_conf}%", "Sell Conf": f"{sell_conf}%", "DECISION": decision
             })
+
+    # Now add Gold
+    with st.spinner("Analyzing XAU/USD..."):
+        gold_raw = fetch_gold_history()
+        gold_featured = build_features(gold_raw, False)
+        win_rate, price_dir, current_price = analyze_price_model(gold_featured)
+        news_dir = get_news_direction("XAU/USD", news_bias)
+        tf_dir = get_timeframe_direction("XAU/USD")
+        contract, url, prefix, suffix = cot_contracts["XAU/USD"]
+        cot_dir = get_cot_positioning(contract, url, prefix, suffix)
+        pivot_dir = get_pivot_direction(gold_raw, False)
+
+        buy_score = sell_score = 0
+        if price_dir == "BUY": buy_score += win_rate
+        else: sell_score += win_rate
+        for d, w in [(news_dir, 52), (tf_dir, 55), (cot_dir, 58), (pivot_dir, 50)]:
+            if d == "BUY": buy_score += w
+            elif d == "SELL": sell_score += w
+
+        total = buy_score + sell_score
+        buy_conf = round((buy_score/total)*100, 1) if total > 0 else 0
+        sell_conf = round((sell_score/total)*100, 1) if total > 0 else 0
+        decision = "BUY" if buy_conf >= 60 else ("SELL" if sell_conf >= 60 else "WAIT")
+
+        results_table.append({
+            "Pair": "XAU/USD", "Price": round(current_price, 4), "Price Model": f"{price_dir} ({win_rate}%)",
+            "News": news_dir, "Timeframe": tf_dir, "COT": cot_dir, "Pivot": pivot_dir,
+            "Buy Conf": f"{buy_conf}%", "Sell Conf": f"{sell_conf}%", "DECISION": decision
+        })
 
     st.dataframe(pd.DataFrame(results_table), use_container_width=True)
 
