@@ -185,7 +185,6 @@ def get_pivot_direction(df, has_ohlc=True):
     pivot = (high + low + close) / 3
     return "BUY" if df["close"].iloc[-1] > pivot else "SELL"
 
-# Initialize memory so results survive when you interact with the dropdown
 if "results_table" not in st.session_state:
     st.session_state.results_table = None
     st.session_state.headlines = None
@@ -254,12 +253,10 @@ if st.button("🔄 Run Full YonKing Analysis"):
             "Buy Conf": f"{buy_conf}%", "Sell Conf": f"{sell_conf}%", "DECISION": decision
         })
 
-    # SAVE results into memory so they don't disappear when you use the dropdown
     st.session_state.results_table = results_table
     st.session_state.headlines = headlines
     st.session_state.news_bias = news_bias
 
-# Show results if we have them (persists across dropdown changes)
 if st.session_state.results_table is not None:
     st.subheader(f"News Sentiment: {st.session_state.news_bias}")
     st.dataframe(pd.DataFrame(st.session_state.results_table), use_container_width=True)
@@ -277,28 +274,8 @@ if st.session_state.results_table is not None:
     selected_pair = st.selectbox("Select a pair to view its live chart:", list(tradingview_symbols.keys()))
     tv_symbol = tradingview_symbols[selected_pair]
 
-    tradingview_widget = f"""
-    <div class="tradingview-widget-container">
-      <div id="tradingview_chart_{selected_pair.replace('/', '')}"></div>
-      <script src="https://s3.tradingview.com/tv.js"></script>
-      <script type="text/javascript">
-      new TradingView.widget({{
-        "width": "100%",
-        "height": 500,
-        "symbol": "{tv_symbol}",
-        "interval": "60",
-        "timezone": "Etc/UTC",
-        "theme": "dark",
-        "style": "1",
-        "locale": "en",
-        "toolbar_bg": "#f1f3f6",
-        "enable_publishing": false,
-        "container_id": "tradingview_chart_{selected_pair.replace('/', '')}"
-      }});
-      </script>
-    </div>
-    """
-    st.components.v1.html(tradingview_widget, height=520)
+    tradingview_url = f"https://www.tradingview.com/widgetembed/?frameElementId=tradingview_chart&symbol={tv_symbol}&interval=60&hidesidetoolbar=0&symboledit=1&saveimage=1&toolbarbg=f1f3f6&studies=%5B%5D&theme=dark&style=1&timezone=Etc%2FUTC"
+    st.components.v1.iframe(tradingview_url, height=500)
 
     with st.expander("Headlines used for news sentiment"):
         for h in st.session_state.headlines:
