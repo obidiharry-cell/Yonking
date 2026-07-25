@@ -185,11 +185,15 @@ def get_pivot_direction(df, has_ohlc=True):
     pivot = (high + low + close) / 3
     return "BUY" if df["close"].iloc[-1] > pivot else "SELL"
 
+# Initialize memory so results survive when you interact with the dropdown
+if "results_table" not in st.session_state:
+    st.session_state.results_table = None
+    st.session_state.headlines = None
+    st.session_state.news_bias = None
+
 st.divider()
 if st.button("🔄 Run Full YonKing Analysis"):
     news_bias, headlines = get_news_sentiment()
-    st.subheader(f"News Sentiment: {news_bias}")
-
     results_table = []
     currency_pairs = {"USD/JPY": ("USD", "JPY"), "GBP/USD": ("GBP", "USD"), "USD/CAD": ("USD", "CAD")}
 
@@ -250,7 +254,15 @@ if st.button("🔄 Run Full YonKing Analysis"):
             "Buy Conf": f"{buy_conf}%", "Sell Conf": f"{sell_conf}%", "DECISION": decision
         })
 
-    st.dataframe(pd.DataFrame(results_table), use_container_width=True)
+    # SAVE results into memory so they don't disappear when you use the dropdown
+    st.session_state.results_table = results_table
+    st.session_state.headlines = headlines
+    st.session_state.news_bias = news_bias
+
+# Show results if we have them (persists across dropdown changes)
+if st.session_state.results_table is not None:
+    st.subheader(f"News Sentiment: {st.session_state.news_bias}")
+    st.dataframe(pd.DataFrame(st.session_state.results_table), use_container_width=True)
 
     st.divider()
     st.subheader("📊 Live Charts")
@@ -267,7 +279,7 @@ if st.button("🔄 Run Full YonKing Analysis"):
 
     tradingview_widget = f"""
     <div class="tradingview-widget-container">
-      <div id="tradingview_chart"></div>
+      <div id="tradingview_chart_{selected_pair.replace('/', '')}"></div>
       <script src="https://s3.tradingview.com/tv.js"></script>
       <script type="text/javascript">
       new TradingView.widget({{
@@ -281,7 +293,7 @@ if st.button("🔄 Run Full YonKing Analysis"):
         "locale": "en",
         "toolbar_bg": "#f1f3f6",
         "enable_publishing": false,
-        "container_id": "tradingview_chart"
+        "container_id": "tradingview_chart_{selected_pair.replace('/', '')}"
       }});
       </script>
     </div>
@@ -289,5 +301,5 @@ if st.button("🔄 Run Full YonKing Analysis"):
     st.components.v1.html(tradingview_widget, height=520)
 
     with st.expander("Headlines used for news sentiment"):
-        for h in headlines:
+        for h in st.session_state.headlines:
             st.write(f"- {h}")
