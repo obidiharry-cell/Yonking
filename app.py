@@ -4,6 +4,7 @@ import numpy as np
 from sklearn.ensemble import RandomForestClassifier
 import requests
 import datetime
+import plotly.graph_objects as go
 
 st.set_page_config(page_title="YonKing", page_icon="📈", layout="wide")
 st.title("📈 YonKing - Forex Analysis Dashboard")
@@ -185,55 +186,40 @@ def get_pivot_direction(df, has_ohlc=True):
     pivot = (high + low + close) / 3
     return "BUY" if df["close"].iloc[-1] > pivot else "SELL"
 
+# Market closed (weekend) check
+now_utc = datetime.datetime.utcnow()
+weekday = now_utc.weekday()
+hour = now_utc.hour
+market_closed = False
+if weekday == 5:
+    market_closed = True
+elif weekday == 6 and hour < 21:
+    market_closed = True
+elif weekday == 4 and hour >= 21:
+    market_closed = True
+
+if market_closed:
+    st.warning("⚠️ Forex market is currently CLOSED (weekend). Prices shown may be from Friday's close. Analysis will resume when the market reopens Sunday evening (UTC).")
+
 if "results_table" not in st.session_state:
     st.session_state.results_table = None
     st.session_state.headlines = None
     st.session_state.news_bias = None
 
-st.divider()
-if st.button("🔄 Run Full YonKing Analysis"):
+def run_full_analysis():
     news_bias, headlines = get_news_sentiment()
     results_table = []
     currency_pairs = {"USD/JPY": ("USD", "JPY"), "GBP/USD": ("GBP", "USD"), "USD/CAD": ("USD", "CAD")}
 
     for pair, (fs, ts) in currency_pairs.items():
-        with st.spinner(f"Analyzing {pair}..."):
-            raw_df = fetch_daily_history(fs, ts)
-            featured_df = build_features(raw_df, True)
-            win_rate, price_dir, current_price = analyze_price_model(featured_df)
-            news_dir = get_news_direction(pair, news_bias)
-            tf_dir = get_timeframe_direction(pair)
-            contract, url, prefix, suffix = cot_contracts[pair]
-            cot_dir = get_cot_positioning(contract, url, prefix, suffix)
-            pivot_dir = get_pivot_direction(raw_df, True)
-
-            buy_score = sell_score = 0
-            if price_dir == "BUY": buy_score += win_rate
-            else: sell_score += win_rate
-            for d, w in [(news_dir, 52), (tf_dir, 55), (cot_dir, 58), (pivot_dir, 50)]:
-                if d == "BUY": buy_score += w
-                elif d == "SELL": sell_score += w
-
-            total = buy_score + sell_score
-            buy_conf = round((buy_score/total)*100, 1) if total > 0 else 0
-            sell_conf = round((sell_score/total)*100, 1) if total > 0 else 0
-            decision = "BUY" if buy_conf >= 60 else ("SELL" if sell_conf >= 60 else "WAIT")
-
-            results_table.append({
-                "Pair": pair, "Price": round(current_price, 4), "Price Model": f"{price_dir} ({win_rate}%)",
-                "News": news_dir, "Timeframe": tf_dir, "COT": cot_dir, "Pivot": pivot_dir,
-                "Buy Conf": f"{buy_conf}%", "Sell Conf": f"{sell_conf}%", "DECISION": decision
-            })
-
-    with st.spinner("Analyzing XAU/USD..."):
-        gold_raw = fetch_gold_history()
-        gold_featured = build_features(gold_raw, False)
-        win_rate, price_dir, current_price = analyze_price_model(gold_featured)
-        news_dir = get_news_direction("XAU/USD", news_bias)
-        tf_dir = get_timeframe_direction("XAU/USD")
-        contract, url, prefix, suffix = cot_contracts["XAU/USD"]
+        raw_df = fetch_daily_history(fs, ts)
+        featured_df = build_features(raw_df, True)
+        win_rate, price_dir, current_price = analyze_price_model(featured_df)
+        news_dir = get_news_direction(pair, news_bias)
+        tf_dir = get_timeframe_direction(pair)
+        contract, url, prefix, suffix = cot_contracts[pair]
         cot_dir = get_cot_positioning(contract, url, prefix, suffix)
-        pivot_dir = get_pivot_direction(gold_raw, False)
+        pivot_dir = get_pivot_direction(raw_df, True)
 
         buy_score = sell_score = 0
         if price_dir == "BUY": buy_score += win_rate
@@ -248,34 +234,109 @@ if st.button("🔄 Run Full YonKing Analysis"):
         decision = "BUY" if buy_conf >= 60 else ("SELL" if sell_conf >= 60 else "WAIT")
 
         results_table.append({
-            "Pair": "XAU/USD", "Price": round(current_price, 4), "Price Model": f"{price_dir} ({win_rate}%)",
+            "Pair": pair, "Price": round(current_price, 4), "Price Model": f"{price_dir} ({win_rate}%)",
             "News": news_dir, "Timeframe": tf_dir, "COT": cot_dir, "Pivot": pivot_dir,
             "Buy Conf": f"{buy_conf}%", "Sell Conf": f"{sell_conf}%", "DECISION": decision
         })
 
+    gold_raw = fetch_gold_history()
+    gold_featured = build_features(gold_raw, False)
+    win_rate, price_dir, current_price = analyze_price_model(gold_featured)
+    news_dir = get_news_direction("XAU/USD", news_bias)
+    tf_dir = get_timeframe_direction("XAU/USD")
+    contract, url, prefix, suffix = cot_contracts["XAU/USD"]
+    cot_dir = get_cot_positioning(contract, url, prefix, suffix)
+    pivot_dir = get_pivot_direction(gold_raw, False)
+
+    buy_score = sell_score = 0
+    if price_dir == "BUY": buy_score += win_rate
+    else: sell_score += win_rate
+    for d, w in [(news_dir, 52), (tf_dir, 55), (cot_dir, 58), (pivot_dir, 50)]:
+        if d == "BUY": buy_score += w
+        elif d == "SELL": sell_score += w
+
+    total = buy_score + sell_score
+    buy_conf = round((buy_score/total)*100, 1) if total > 0 else 0
+    sell_conf = round((sell_score/total)*100, 1) if total > 0 else 0
+    decision = "BUY" if buy_conf >= 60 else ("SELL" if sell_conf >= 60 else "WAIT")
+
+    results_table.append({
+        "Pair": "XAU/USD", "Price": round(current_price, 4), "Price Model": f"{price_dir} ({win_rate}%)",
+        "News": news_dir, "Timeframe": tf_dir, "COT": cot_dir, "Pivot": pivot_dir,
+        "Buy Conf": f"{buy_conf}%", "Sell Conf": f"{sell_conf}%", "DECISION": decision
+    })
+
     st.session_state.results_table = results_table
     st.session_state.headlines = headlines
     st.session_state.news_bias = news_bias
+
+st.divider()
+
+# AUTO-RUN: runs automatically when page loads, no button needed
+if st.session_state.results_table is None:
+    with st.spinner("Running YonKing's full analysis automatically..."):
+        run_full_analysis()
+
+if st.button("🔄 Refresh Analysis"):
+    with st.spinner("Refreshing..."):
+        run_full_analysis()
 
 if st.session_state.results_table is not None:
     st.subheader(f"News Sentiment: {st.session_state.news_bias}")
     st.dataframe(pd.DataFrame(st.session_state.results_table), use_container_width=True)
 
     st.divider()
-    st.subheader("📊 Live Charts")
+    st.subheader("📊 YonKing's Calculated Chart View")
 
-    tradingview_symbols = {
-        "USD/JPY": "FX:USDJPY",
-        "GBP/USD": "FX:GBPUSD",
-        "USD/CAD": "FX:USDCAD",
-        "XAU/USD": "OANDA:XAUUSD"
-    }
+    chart_pairs = {"USD/JPY": ("USD", "JPY", True), "GBP/USD": ("GBP", "USD", True),
+                   "USD/CAD": ("USD", "CAD", True), "XAU/USD": (None, None, False)}
 
-    selected_pair = st.selectbox("Select a pair to view its live chart:", list(tradingview_symbols.keys()))
-    tv_symbol = tradingview_symbols[selected_pair]
+    selected_pair = st.selectbox("Select a pair to view its chart with calculated levels:", list(chart_pairs.keys()))
 
-    tradingview_url = f"https://www.tradingview.com/widgetembed/?frameElementId=tradingview_chart&symbol={tv_symbol}&interval=60&hidesidetoolbar=0&symboledit=1&saveimage=1&toolbarbg=f1f3f6&studies=%5B%5D&theme=dark&style=1&timezone=Etc%2FUTC"
-    st.components.v1.iframe(tradingview_url, height=500)
+    fs, ts, has_ohlc = chart_pairs[selected_pair]
+    if has_ohlc:
+        chart_df = fetch_daily_history(fs, ts).tail(60).reset_index(drop=True)
+    else:
+        chart_df = fetch_gold_history().tail(60).reset_index(drop=True)
+
+    fig = go.Figure()
+    if has_ohlc:
+        fig.add_trace(go.Candlestick(x=chart_df["date"], open=chart_df["open"], high=chart_df["high"],
+                                       low=chart_df["low"], close=chart_df["close"], name=selected_pair))
+    else:
+        fig.add_trace(go.Scatter(x=chart_df["date"], y=chart_df["close"], mode="lines", name=selected_pair))
+
+    if has_ohlc:
+        swing_high = chart_df["high"].rolling(20, min_periods=1).max().iloc[-1]
+        swing_low = chart_df["low"].rolling(20, min_periods=1).min().iloc[-1]
+    else:
+        swing_high = chart_df["close"].rolling(20, min_periods=1).max().iloc[-1]
+        swing_low = chart_df["close"].rolling(20, min_periods=1).min().iloc[-1]
+
+    fig.add_hline(y=swing_high, line_dash="dash", line_color="red", annotation_text=f"Resistance: {round(swing_high,4)}")
+    fig.add_hline(y=swing_low, line_dash="dash", line_color="green", annotation_text=f"Support: {round(swing_low,4)}")
+
+    y_prev = chart_df.iloc[-2]
+    close_p = y_prev["close"]
+    if has_ohlc:
+        high_p, low_p = y_prev["high"], y_prev["low"]
+    else:
+        high_p, low_p = close_p * 1.005, close_p * 0.995
+    pivot = (high_p + low_p + close_p) / 3
+    fig.add_hline(y=pivot, line_dash="dot", line_color="yellow", annotation_text=f"Pivot: {round(pivot,4)}")
+
+    recent_lows = chart_df["low"] if has_ohlc else chart_df["close"]
+    min_idx = recent_lows.idxmin()
+    if min_idx < len(chart_df) - 1:
+        fig.add_trace(go.Scatter(
+            x=[chart_df["date"].iloc[min_idx], chart_df["date"].iloc[-1]],
+            y=[recent_lows.iloc[min_idx], chart_df["close"].iloc[-1]],
+            mode="lines", line=dict(color="cyan", width=2, dash="solid"), name="Trend line"
+        ))
+
+    fig.update_layout(title=f"{selected_pair} - Price with Calculated Levels", template="plotly_dark",
+                       height=500, xaxis_rangeslider_visible=False)
+    st.plotly_chart(fig, use_container_width=True)
 
     with st.expander("Headlines used for news sentiment"):
         for h in st.session_state.headlines:
