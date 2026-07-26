@@ -81,6 +81,15 @@ def build_features(df, has_ohlc=True):
     df["bb_upper"] = df["bb_mid"] + (2 * df["bb_std"])
     df["bb_lower"] = df["bb_mid"] - (2 * df["bb_std"])
     df["bb_position"] = (df["close"] - df["bb_lower"]) / (df["bb_upper"] - df["bb_lower"])
+    if has_ohlc:
+        df["prev_close_val"] = df["close"].shift(1)
+        df["tr1"] = df["high"] - df["low"]
+        df["tr2"] = abs(df["high"] - df["prev_close_val"])
+        df["tr3"] = abs(df["low"] - df["prev_close_val"])
+        df["true_range"] = df[["tr1", "tr2", "tr3"]].max(axis=1)
+        df["atr"] = df["true_range"].rolling(14).mean()
+    else:
+        df["atr"] = df["close"].diff().abs().rolling(14).mean()
     return df.dropna().reset_index(drop=True)
 
 features = ["change_1d", "change_3d", "change_5d", "ma_diff", "rsi",
@@ -186,7 +195,35 @@ def get_pivot_direction(df, has_ohlc=True):
     pivot = (high + low + close) / 3
     return "BUY" if df["close"].iloc[-1] > pivot else "SELL"
 
-# Market closed (weekend) check
+def calculate_trade_levels(direction, current_price, atr, swing_high, swing_low):
+    if direction == "BUY":
+        dist_to_support = current_price - swing_low
+        if 0 < dist_to_support < (atr * 3):
+            stop_loss_price = swing_low - (atr * 0.3)
+        else:
+            stop_loss_price = current_price - (atr * 1.5)
+        dist_to_resist = swing_high - current_price
+        if dist_to_resist > 0:
+            take_profit_price = swing_high - (atr * 0.2)
+            if take_profit_price <= current_price:
+                take_profit_price = current_price + (atr * 1.5)
+        else:
+            take_profit_price = current_price + (atr * 1.5)
+    else:
+        dist_to_resist = swing_high - current_price
+        if 0 < dist_to_resist < (atr * 3):
+            stop_loss_price = swing_high + (atr * 0.3)
+        else:
+            stop_loss_price = current_price + (atr * 1.5)
+        dist_to_support = current_price - swing_low
+        if dist_to_support > 0:
+            take_profit_price = swing_low + (atr * 0.2)
+            if take_profit_price >= current_price:
+                take_profit_price = current_price - (atr * 1.5)
+        else:
+            take_profit_price = current_price - (atr * 1.5)
+    return round(stop_loss_price, 5), round(take_profit_price, 5)
+
 now_utc = datetime.datetime.utcnow()
 weekday = now_utc.weekday()
 hour = now_utc.hour
@@ -233,10 +270,18 @@ def run_full_analysis():
         sell_conf = round((sell_score/total)*100, 1) if total > 0 else 0
         decision = "BUY" if buy_conf >= 60 else ("SELL" if sell_conf >= 60 else "WAIT")
 
+        sl_price, tp_price = "-", "-"
+        if decision != "WAIT":
+            atr = featured_df["atr"].iloc[-1]
+            swing_high = featured_df["swing_high_20"].iloc[-1]
+            swing_low = featured_df["swing_low_20"].iloc[-1]
+            sl_price, tp_price = calculate_trade_levels(decision, current_price, atr, swing_high, swing_low)
+
         results_table.append({
             "Pair": pair, "Price": round(current_price, 4), "Price Model": f"{price_dir} ({win_rate}%)",
             "News": news_dir, "Timeframe": tf_dir, "COT": cot_dir, "Pivot": pivot_dir,
-            "Buy Conf": f"{buy_conf}%", "Sell Conf": f"{sell_conf}%", "DECISION": decision
+            "Buy Conf": f"{buy_conf}%", "Sell Conf": f"{sell_conf}%", "DECISION": decision,
+            "Stop Loss": sl_price, "Take Profit": tp_price
         })
 
     gold_raw = fetch_gold_history()
@@ -260,10 +305,18 @@ def run_full_analysis():
     sell_conf = round((sell_score/total)*100, 1) if total > 0 else 0
     decision = "BUY" if buy_conf >= 60 else ("SELL" if sell_conf >= 60 else "WAIT")
 
+    sl_price, tp_price = "-", "-"
+    if decision != "WAIT":
+        atr = gold_featured["atr"].iloc[-1]
+        swing_high = gold_featured["swing_high_20"].iloc[-1]
+        swing_low = gold_featured["swing_low_20"].iloc[-1]
+        sl_price, tp_price = calculate_trade_levels(decision, current_price, atr, swing_high, swing_low)
+
     results_table.append({
         "Pair": "XAU/USD", "Price": round(current_price, 4), "Price Model": f"{price_dir} ({win_rate}%)",
         "News": news_dir, "Timeframe": tf_dir, "COT": cot_dir, "Pivot": pivot_dir,
-        "Buy Conf": f"{buy_conf}%", "Sell Conf": f"{sell_conf}%", "DECISION": decision
+        "Buy Conf": f"{buy_conf}%", "Sell Conf": f"{sell_conf}%", "DECISION": decision,
+        "Stop Loss": sl_price, "Take Profit": tp_price
     })
 
     st.session_state.results_table = results_table
@@ -272,7 +325,6 @@ def run_full_analysis():
 
 st.divider()
 
-# AUTO-RUN: runs automatically when page loads, no button needed
 if st.session_state.results_table is None:
     with st.spinner("Running YonKing's full analysis automatically..."):
         run_full_analysis()
@@ -284,6 +336,8 @@ if st.button("🔄 Refresh Analysis"):
 if st.session_state.results_table is not None:
     st.subheader(f"News Sentiment: {st.session_state.news_bias}")
     st.dataframe(pd.DataFrame(st.session_state.results_table), use_container_width=True)
+
+    st.info("💡 For any BUY/SELL decision: enter at current Price, set Stop Loss and Take Profit to the exact values shown above in MT5/MT4.")
 
     st.divider()
     st.subheader("📊 YonKing's Calculated Chart View")
