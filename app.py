@@ -5,6 +5,9 @@ from sklearn.ensemble import RandomForestClassifier
 import requests
 import datetime
 import plotly.graph_objects as go
+import firebase_admin
+from firebase_admin import credentials, firestore
+import json
 
 st.set_page_config(page_title="YonKing", page_icon="📈", layout="wide")
 st.title("📈 YonKing - Forex Analysis Dashboard")
@@ -14,9 +17,6 @@ NEWS_API_KEY = st.secrets["NEWS_API_KEY"]
 GROQ_KEY = st.secrets["GROQ_KEY"]
 ALPHA_KEY = st.secrets["ALPHA_KEY"]
 TWELVE_KEY = st.secrets["TWELVE_KEY"]
-import firebase_admin
-from firebase_admin import credentials, firestore
-import json
 
 if not firebase_admin._apps:
     firebase_key_dict = json.loads(st.secrets["FIREBASE_KEY"])
@@ -24,60 +24,6 @@ if not firebase_admin._apps:
     firebase_admin.initialize_app(cred)
 
 db = firestore.client()
-def save_decisions_to_firestore(results_table):
-    today_str = datetime.date.today().strftime("%Y-%m-%d")
-    for row in results_table:
-        if row["DECISION"] != "WAIT":
-            doc_id = f"{today_str}_{row['Pair'].replace('/', '')}"
-            db.collection("trade_history").document(doc_id).set({
-                "date": today_str,
-                "pair": row["Pair"],
-                "decision": row["DECISION"],
-                "entry_price": row["Price"],
-                "stop_loss": row["Stop Loss"],
-                "take_profit": row["Take Profit"],
-                "outcome": "OPEN"
-            })
-
-def check_previous_trades():
-    docs = db.collection("trade_history").where("outcome", "==", "OPEN").stream()
-    results = []
-    for doc in docs:
-        trade = doc.to_dict()
-        pair = trade["pair"]
-
-        try:
-            if pair == "XAU/USD":
-                current_df = fetch_gold_history()
-            else:
-                fs, ts = {"USD/JPY": ("USD", "JPY"), "GBP/USD": ("GBP", "USD"), "USD/CAD": ("USD", "CAD")}[pair]
-                current_df = fetch_daily_history(fs, ts)
-            current_price = current_df["close"].iloc[-1]
-        except:
-            continue
-
-        decision = trade["decision"]
-        sl = trade["stop_loss"]
-        tp = trade["take_profit"]
-        outcome = "OPEN"
-
-        if decision == "BUY":
-            if current_price >= tp:
-                outcome = "WIN (hit take-profit)"
-            elif current_price <= sl:
-                outcome = "LOSS (hit stop-loss)"
-        else:
-            if current_price <= tp:
-                outcome = "WIN (hit take-profit)"
-            elif current_price >= sl:
-                outcome = "LOSS (hit stop-loss)"
-
-        if outcome != "OPEN":
-            db.collection("trade_history").document(doc.id).update({"outcome": outcome})
-
-        results.append({"Date": trade["date"], "Pair": pair, "Decision": decision,
-                        "Entry": trade["entry_price"], "Current/Exit": round(current_price, 4), "Outcome": outcome})
-    return results
 
 @st.cache_data(ttl=3600)
 def fetch_daily_history(from_sym, to_sym):
@@ -288,6 +234,60 @@ def calculate_trade_levels(direction, current_price, atr, swing_high, swing_low)
             take_profit_price = current_price - (atr * 1.5)
     return round(stop_loss_price, 5), round(take_profit_price, 5)
 
+def save_decisions_to_firestore(results_table):
+    today_str = datetime.date.today().strftime("%Y-%m-%d")
+    for row in results_table:
+        if row["DECISION"] != "WAIT":
+            doc_id = f"{today_str}_{row['Pair'].replace('/', '')}"
+            db.collection("trade_history").document(doc_id).set({
+                "date": today_str,
+                "pair": row["Pair"],
+                "decision": row["DECISION"],
+                "entry_price": row["Price"],
+                "stop_loss": row["Stop Loss"],
+                "take_profit": row["Take Profit"],
+                "outcome": "OPEN"
+            })
+
+def check_previous_trades():
+    docs = db.collection("trade_history").where("outcome", "==", "OPEN").stream()
+    results = []
+    for doc in docs:
+        trade = doc.to_dict()
+        pair = trade["pair"]
+        try:
+            if pair == "XAU/USD":
+                current_df = fetch_gold_history()
+            else:
+                fs, ts = {"USD/JPY": ("USD", "JPY"), "GBP/USD": ("GBP", "USD"), "USD/CAD": ("USD", "CAD")}[pair]
+                current_df = fetch_daily_history(fs, ts)
+            current_price = current_df["close"].iloc[-1]
+        except:
+            continue
+
+        decision = trade["decision"]
+        sl = trade["stop_loss"]
+        tp = trade["take_profit"]
+        outcome = "OPEN"
+
+        if decision == "BUY":
+            if current_price >= tp:
+                outcome = "WIN (hit take-profit)"
+            elif current_price <= sl:
+                outcome = "LOSS (hit stop-loss)"
+        else:
+            if current_price <= tp:
+                outcome = "WIN (hit take-profit)"
+            elif current_price >= sl:
+                outcome = "LOSS (hit stop-loss)"
+
+        if outcome != "OPEN":
+            db.collection("trade_history").document(doc.id).update({"outcome": outcome})
+
+        results.append({"Date": trade["date"], "Pair": pair, "Decision": decision,
+                        "Entry": trade["entry_price"], "Current/Exit": round(current_price, 4), "Outcome": outcome})
+    return results
+
 now_utc = datetime.datetime.utcnow()
 weekday = now_utc.weekday()
 hour = now_utc.hour
@@ -439,30 +439,4 @@ if st.session_state.results_table is not None:
         swing_low = chart_df["close"].rolling(20, min_periods=1).min().iloc[-1]
 
     fig.add_hline(y=swing_high, line_dash="dash", line_color="red", annotation_text=f"Resistance: {round(swing_high,4)}")
-    fig.add_hline(y=swing_low, line_dash="dash", line_color="green", annotation_text=f"Support: {round(swing_low,4)}")
-
-    y_prev = chart_df.iloc[-2]
-    close_p = y_prev["close"]
-    if has_ohlc:
-        high_p, low_p = y_prev["high"], y_prev["low"]
-    else:
-        high_p, low_p = close_p * 1.005, close_p * 0.995
-    pivot = (high_p + low_p + close_p) / 3
-    fig.add_hline(y=pivot, line_dash="dot", line_color="yellow", annotation_text=f"Pivot: {round(pivot,4)}")
-
-    recent_lows = chart_df["low"] if has_ohlc else chart_df["close"]
-    min_idx = recent_lows.idxmin()
-    if min_idx < len(chart_df) - 1:
-        fig.add_trace(go.Scatter(
-            x=[chart_df["date"].iloc[min_idx], chart_df["date"].iloc[-1]],
-            y=[recent_lows.iloc[min_idx], chart_df["close"].iloc[-1]],
-            mode="lines", line=dict(color="cyan", width=2, dash="solid"), name="Trend line"
-        ))
-
-    fig.update_layout(title=f"{selected_pair} - Price with Calculated Levels", template="plotly_dark",
-                       height=500, xaxis_rangeslider_visible=False)
-    st.plotly_chart(fig, use_container_width=True)
-
-    with st.expander("Headlines used for news sentiment"):
-        for h in st.session_state.headlines:
-            st.write(f"- {h}")
+    fig.add_hline(y
