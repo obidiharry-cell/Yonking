@@ -25,6 +25,84 @@ if not firebase_admin._apps:
 
 db = firestore.client()
 
+import firebase_admin
+from firebase_admin import auth as firebase_auth
+
+def signup_user(email, password, phone, age, location):
+    try:
+        user = firebase_auth.create_user(email=email, password=password, phone_number=phone)
+        db.collection("pending_users").document(user.uid).set({
+            "email": email,
+            "phone": phone,
+            "age": age,
+            "location": location,
+            "approved": False,
+            "signup_date": datetime.date.today().strftime("%Y-%m-%d")
+        })
+        return True, "Account created! Waiting for approval before you can log in."
+    except Exception as e:
+        return False, str(e)
+
+def check_approval(email):
+    users = db.collection("pending_users").where("email", "==", email).stream()
+    for u in users:
+        data = u.to_dict()
+        return data.get("approved", False)
+    return False
+
+def login_user(email, password):
+    try:
+        user = firebase_auth.get_user_by_email(email)
+        if not check_approval(email):
+            return False, "Your account is still pending approval."
+        return True, "Login successful!"
+    except Exception as e:
+        return False, "Invalid email or account not found."
+
+if "logged_in" not in st.session_state:
+    st.session_state.logged_in = False
+    st.session_state.user_email = None
+
+if not st.session_state.logged_in:
+    st.title("📈 Welcome to YonKing")
+    tab1, tab2 = st.tabs(["Login", "Sign Up"])
+
+    with tab1:
+        login_email = st.text_input("Email", key="login_email")
+        login_password = st.text_input("Password", type="password", key="login_password")
+        if st.button("Login"):
+            success, message = login_user(login_email, login_password)
+            if success:
+                st.session_state.logged_in = True
+                st.session_state.user_email = login_email
+                st.rerun()
+            else:
+                st.error(message)
+
+    with tab2:
+        signup_email = st.text_input("Email", key="signup_email")
+        signup_password = st.text_input("Password", type="password", key="signup_password")
+        signup_phone = st.text_input("Phone Number (e.g. +2348012345678)", key="signup_phone")
+        signup_age = st.number_input("Age", min_value=1, max_value=120, key="signup_age")
+        signup_location = st.text_input("Location (City, Country)", key="signup_location")
+        if st.button("Sign Up"):
+            if signup_email and signup_password and signup_phone and signup_location:
+                success, message = signup_user(signup_email, signup_password, signup_phone, signup_age, signup_location)
+                if success:
+                    st.success(message)
+                else:
+                    st.error(message)
+            else:
+                st.warning("Please fill in all fields.")
+
+    st.stop()
+
+st.sidebar.write(f"Logged in as: {st.session_state.user_email}")
+if st.sidebar.button("Logout"):
+    st.session_state.logged_in = False
+    st.session_state.user_email = None
+    st.rerun()
+
 @st.cache_data(ttl=3600)
 def fetch_daily_history(from_sym, to_sym):
     url = "https://www.alphavantage.co/query"
