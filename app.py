@@ -14,6 +14,16 @@ NEWS_API_KEY = st.secrets["NEWS_API_KEY"]
 GROQ_KEY = st.secrets["GROQ_KEY"]
 ALPHA_KEY = st.secrets["ALPHA_KEY"]
 TWELVE_KEY = st.secrets["TWELVE_KEY"]
+import firebase_admin
+from firebase_admin import credentials, firestore
+import json
+
+if not firebase_admin._apps:
+    firebase_key_dict = json.loads(st.secrets["FIREBASE_KEY"])
+    cred = credentials.Certificate(firebase_key_dict)
+    firebase_admin.initialize_app(cred)
+
+db = firestore.client()
 
 @st.cache_data(ttl=3600)
 def fetch_daily_history(from_sym, to_sym):
