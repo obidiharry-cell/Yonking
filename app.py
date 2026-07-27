@@ -7,11 +7,10 @@ import datetime
 import plotly.graph_objects as go
 import firebase_admin
 from firebase_admin import credentials, firestore
+from firebase_admin import auth as firebase_auth
 import json
 
 st.set_page_config(page_title="YonKing", page_icon="📈", layout="wide")
-st.title("📈 YonKing - Forex Analysis Dashboard")
-st.caption("AI-powered price prediction, news sentiment, institutional positioning, and timeframe analysis")
 
 NEWS_API_KEY = st.secrets["NEWS_API_KEY"]
 GROQ_KEY = st.secrets["GROQ_KEY"]
@@ -25,19 +24,12 @@ if not firebase_admin._apps:
 
 db = firestore.client()
 
-import firebase_admin
-from firebase_admin import auth as firebase_auth
-
 def signup_user(email, password, phone, age, location):
     try:
         user = firebase_auth.create_user(email=email, password=password, phone_number=phone)
         db.collection("pending_users").document(user.uid).set({
-            "email": email,
-            "phone": phone,
-            "age": age,
-            "location": location,
-            "approved": False,
-            "signup_date": datetime.date.today().strftime("%Y-%m-%d")
+            "email": email, "phone": phone, "age": age, "location": location,
+            "approved": False, "signup_date": datetime.date.today().strftime("%Y-%m-%d")
         })
         return True, "Account created! Waiting for approval before you can log in."
     except Exception as e:
@@ -60,7 +52,7 @@ def login_user(email, password):
         return True, "Login successful!"
     except Exception as e:
         return False, "Invalid email or account not found."
-        
+
 if "logged_in" not in st.session_state:
     st.session_state.logged_in = False
     st.session_state.user_email = None
@@ -68,7 +60,6 @@ if "logged_in" not in st.session_state:
 if not st.session_state.logged_in:
     st.title("📈 Welcome to YonKing")
     tab1, tab2 = st.tabs(["Login", "Sign Up"])
-
     with tab1:
         login_email = st.text_input("Email", key="login_email")
         login_password = st.text_input("Password", type="password", key="login_password")
@@ -80,7 +71,6 @@ if not st.session_state.logged_in:
                 st.rerun()
             else:
                 st.error(message)
-
     with tab2:
         signup_email = st.text_input("Email", key="signup_email")
         signup_password = st.text_input("Password", type="password", key="signup_password")
@@ -96,7 +86,6 @@ if not st.session_state.logged_in:
                     st.error(message)
             else:
                 st.warning("Please fill in all fields.")
-
     st.stop()
 
 st.sidebar.write(f"Logged in as: {st.session_state.user_email}")
@@ -106,7 +95,6 @@ if st.sidebar.button("Logout"):
     st.rerun()
 
 ADMIN_EMAIL = "obidiharry@gmail.com"
-
 if st.session_state.user_email == ADMIN_EMAIL:
     with st.sidebar.expander("🔑 Admin Panel"):
         st.write("Pending Approvals")
@@ -119,7 +107,15 @@ if st.session_state.user_email == ADMIN_EMAIL:
                 st.success(f"Approved {data['email']}")
                 st.rerun()
 
-response = requests.get(url, params=params)
+st.title("📈 YonKing - Forex Analysis Dashboard")
+st.caption("AI-powered price prediction, news sentiment, institutional positioning, and timeframe analysis")
+
+@st.cache_data(ttl=3600)
+def fetch_daily_history(from_sym, to_sym):
+    url = "https://www.alphavantage.co/query"
+    params = {"function": "FX_DAILY", "from_symbol": from_sym, "to_symbol": to_sym,
+              "apikey": ALPHA_KEY, "outputsize": "full"}
+    response = requests.get(url, params=params)
     data = response.json()
     if "Time Series FX (Daily)" not in data:
         st.warning(f"⚠️ Data temporarily unavailable for {from_sym}/{to_sym} (API limit reached). Try again in a few minutes.")
@@ -138,6 +134,9 @@ def fetch_gold_history():
     params = {"function": "GOLD_SILVER_HISTORY", "symbol": "GOLD", "interval": "daily", "apikey": ALPHA_KEY}
     response = requests.get(url, params=params)
     data = response.json()
+    if "data" not in data:
+        st.warning("⚠️ Gold data temporarily unavailable (API limit reached). Try again in a few minutes.")
+        st.stop()
     records = data["data"]
     rows = [{"date": e["date"], "close": float(e["price"])} for e in records]
     df = pd.DataFrame(rows)
@@ -332,13 +331,9 @@ def save_decisions_to_firestore(results_table):
         if row["DECISION"] != "WAIT":
             doc_id = f"{today_str}_{row['Pair'].replace('/', '')}"
             db.collection("trade_history").document(doc_id).set({
-                "date": today_str,
-                "pair": row["Pair"],
-                "decision": row["DECISION"],
-                "entry_price": row["Price"],
-                "stop_loss": row["Stop Loss"],
-                "take_profit": row["Take Profit"],
-                "outcome": "OPEN"
+                "date": today_str, "pair": row["Pair"], "decision": row["DECISION"],
+                "entry_price": row["Price"], "stop_loss": row["Stop Loss"],
+                "take_profit": row["Take Profit"], "outcome": "OPEN"
             })
 
 def check_previous_trades():
@@ -356,26 +351,18 @@ def check_previous_trades():
             current_price = current_df["close"].iloc[-1]
         except:
             continue
-
         decision = trade["decision"]
         sl = trade["stop_loss"]
         tp = trade["take_profit"]
         outcome = "OPEN"
-
         if decision == "BUY":
-            if current_price >= tp:
-                outcome = "WIN (hit take-profit)"
-            elif current_price <= sl:
-                outcome = "LOSS (hit stop-loss)"
+            if current_price >= tp: outcome = "WIN (hit take-profit)"
+            elif current_price <= sl: outcome = "LOSS (hit stop-loss)"
         else:
-            if current_price <= tp:
-                outcome = "WIN (hit take-profit)"
-            elif current_price >= sl:
-                outcome = "LOSS (hit stop-loss)"
-
+            if current_price <= tp: outcome = "WIN (hit take-profit)"
+            elif current_price >= sl: outcome = "LOSS (hit stop-loss)"
         if outcome != "OPEN":
             db.collection("trade_history").document(doc.id).update({"outcome": outcome})
-
         results.append({"Date": trade["date"], "Pair": pair, "Decision": decision,
                         "Entry": trade["entry_price"], "Current/Exit": round(current_price, 4), "Outcome": outcome})
     return results
@@ -384,15 +371,12 @@ now_utc = datetime.datetime.utcnow()
 weekday = now_utc.weekday()
 hour = now_utc.hour
 market_closed = False
-if weekday == 5:
-    market_closed = True
-elif weekday == 6 and hour < 21:
-    market_closed = True
-elif weekday == 4 and hour >= 21:
-    market_closed = True
+if weekday == 5: market_closed = True
+elif weekday == 6 and hour < 21: market_closed = True
+elif weekday == 4 and hour >= 21: market_closed = True
 
 if market_closed:
-    st.warning("⚠️ Forex market is currently CLOSED (weekend). Prices shown may be from Friday's close. Analysis will resume when the market reopens Sunday evening (UTC).")
+    st.warning("⚠️ Forex market is currently CLOSED (weekend). Prices shown may be from Friday's close.")
 
 if "results_table" not in st.session_state:
     st.session_state.results_table = None
@@ -403,7 +387,6 @@ def run_full_analysis():
     news_bias, headlines = get_news_sentiment()
     results_table = []
     currency_pairs = {"USD/JPY": ("USD", "JPY"), "GBP/USD": ("GBP", "USD"), "USD/CAD": ("USD", "CAD")}
-
     for pair, (fs, ts) in currency_pairs.items():
         raw_df = fetch_daily_history(fs, ts)
         featured_df = build_features(raw_df, True)
@@ -413,26 +396,22 @@ def run_full_analysis():
         contract, url, prefix, suffix = cot_contracts[pair]
         cot_dir = get_cot_positioning(contract, url, prefix, suffix)
         pivot_dir = get_pivot_direction(raw_df, True)
-
         buy_score = sell_score = 0
         if price_dir == "BUY": buy_score += win_rate
         else: sell_score += win_rate
         for d, w in [(news_dir, 52), (tf_dir, 55), (cot_dir, 58), (pivot_dir, 50)]:
             if d == "BUY": buy_score += w
             elif d == "SELL": sell_score += w
-
         total = buy_score + sell_score
         buy_conf = round((buy_score/total)*100, 1) if total > 0 else 0
         sell_conf = round((sell_score/total)*100, 1) if total > 0 else 0
         decision = "BUY" if buy_conf >= 60 else ("SELL" if sell_conf >= 60 else "WAIT")
-
         sl_price, tp_price = "-", "-"
         if decision != "WAIT":
             atr = featured_df["atr"].iloc[-1]
             swing_high = featured_df["swing_high_20"].iloc[-1]
             swing_low = featured_df["swing_low_20"].iloc[-1]
             sl_price, tp_price = calculate_trade_levels(decision, current_price, atr, swing_high, swing_low)
-
         results_table.append({
             "Pair": pair, "Price": round(current_price, 4), "Price Model": f"{price_dir} ({win_rate}%)",
             "News": news_dir, "Timeframe": tf_dir, "COT": cot_dir, "Pivot": pivot_dir,
@@ -448,26 +427,22 @@ def run_full_analysis():
     contract, url, prefix, suffix = cot_contracts["XAU/USD"]
     cot_dir = get_cot_positioning(contract, url, prefix, suffix)
     pivot_dir = get_pivot_direction(gold_raw, False)
-
     buy_score = sell_score = 0
     if price_dir == "BUY": buy_score += win_rate
     else: sell_score += win_rate
     for d, w in [(news_dir, 52), (tf_dir, 55), (cot_dir, 58), (pivot_dir, 50)]:
         if d == "BUY": buy_score += w
         elif d == "SELL": sell_score += w
-
     total = buy_score + sell_score
     buy_conf = round((buy_score/total)*100, 1) if total > 0 else 0
     sell_conf = round((sell_score/total)*100, 1) if total > 0 else 0
     decision = "BUY" if buy_conf >= 60 else ("SELL" if sell_conf >= 60 else "WAIT")
-
     sl_price, tp_price = "-", "-"
     if decision != "WAIT":
         atr = gold_featured["atr"].iloc[-1]
         swing_high = gold_featured["swing_high_20"].iloc[-1]
         swing_low = gold_featured["swing_low_20"].iloc[-1]
         sl_price, tp_price = calculate_trade_levels(decision, current_price, atr, swing_high, swing_low)
-
     results_table.append({
         "Pair": "XAU/USD", "Price": round(current_price, 4), "Price Model": f"{price_dir} ({win_rate}%)",
         "News": news_dir, "Timeframe": tf_dir, "COT": cot_dir, "Pivot": pivot_dir,
@@ -499,40 +474,32 @@ if st.button("🔄 Refresh Analysis"):
 if st.session_state.results_table is not None:
     st.subheader(f"News Sentiment: {st.session_state.news_bias}")
     st.dataframe(pd.DataFrame(st.session_state.results_table), use_container_width=True)
-
     st.info("💡 For any BUY/SELL decision: enter at current Price, set Stop Loss and Take Profit to the exact values shown above in MT5/MT4.")
 
     st.divider()
     st.subheader("📊 YonKing's Calculated Chart View")
-
     chart_pairs = {"USD/JPY": ("USD", "JPY", True), "GBP/USD": ("GBP", "USD", True),
                    "USD/CAD": ("USD", "CAD", True), "XAU/USD": (None, None, False)}
-
     selected_pair = st.selectbox("Select a pair to view its chart with calculated levels:", list(chart_pairs.keys()))
-
     fs, ts, has_ohlc = chart_pairs[selected_pair]
     if has_ohlc:
         chart_df = fetch_daily_history(fs, ts).tail(60).reset_index(drop=True)
     else:
         chart_df = fetch_gold_history().tail(60).reset_index(drop=True)
-
     fig = go.Figure()
     if has_ohlc:
         fig.add_trace(go.Candlestick(x=chart_df["date"], open=chart_df["open"], high=chart_df["high"],
                                        low=chart_df["low"], close=chart_df["close"], name=selected_pair))
     else:
         fig.add_trace(go.Scatter(x=chart_df["date"], y=chart_df["close"], mode="lines", name=selected_pair))
-
     if has_ohlc:
         swing_high = chart_df["high"].rolling(20, min_periods=1).max().iloc[-1]
         swing_low = chart_df["low"].rolling(20, min_periods=1).min().iloc[-1]
     else:
         swing_high = chart_df["close"].rolling(20, min_periods=1).max().iloc[-1]
         swing_low = chart_df["close"].rolling(20, min_periods=1).min().iloc[-1]
-
     fig.add_hline(y=swing_high, line_dash="dash", line_color="red", annotation_text=f"Resistance: {round(swing_high,4)}")
     fig.add_hline(y=swing_low, line_dash="dash", line_color="green", annotation_text=f"Support: {round(swing_low,4)}")
-
     y_prev = chart_df.iloc[-2]
     close_p = y_prev["close"]
     if has_ohlc:
@@ -541,7 +508,6 @@ if st.session_state.results_table is not None:
         high_p, low_p = close_p * 1.005, close_p * 0.995
     pivot = (high_p + low_p + close_p) / 3
     fig.add_hline(y=pivot, line_dash="dot", line_color="yellow", annotation_text=f"Pivot: {round(pivot,4)}")
-
     recent_lows = chart_df["low"] if has_ohlc else chart_df["close"]
     min_idx = recent_lows.idxmin()
     if min_idx < len(chart_df) - 1:
@@ -550,7 +516,6 @@ if st.session_state.results_table is not None:
             y=[recent_lows.iloc[min_idx], chart_df["close"].iloc[-1]],
             mode="lines", line=dict(color="cyan", width=2, dash="solid"), name="Trend line"
         ))
-
     fig.update_layout(title=f"{selected_pair} - Price with Calculated Levels", template="plotly_dark",
                        height=500, xaxis_rangeslider_visible=False)
     st.plotly_chart(fig, use_container_width=True)
@@ -558,4 +523,3 @@ if st.session_state.results_table is not None:
     with st.expander("Headlines used for news sentiment"):
         for h in st.session_state.headlines:
             st.write(f"- {h}")
-    
