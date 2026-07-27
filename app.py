@@ -103,6 +103,20 @@ if st.sidebar.button("Logout"):
     st.session_state.user_email = None
     st.rerun()
 
+ADMIN_EMAIL = "obidiharry@gmail.com"
+
+if st.session_state.user_email == ADMIN_EMAIL:
+    with st.sidebar.expander("🔑 Admin Panel"):
+        st.write("Pending Approvals")
+        pending = db.collection("pending_users").where("approved", "==", False).stream()
+        for p in pending:
+            data = p.to_dict()
+            st.write(f"**{data['email']}** | Age: {data['age']} | Location: {data['location']} | Phone: {data['phone']}")
+            if st.button(f"Approve {data['email']}", key=f"approve_{p.id}"):
+                db.collection("pending_users").document(p.id).update({"approved": True})
+                st.success(f"Approved {data['email']}")
+                st.rerun()
+
 @st.cache_data(ttl=3600)
 def fetch_daily_history(from_sym, to_sym):
     url = "https://www.alphavantage.co/query"
