@@ -24,6 +24,60 @@ if not firebase_admin._apps:
     firebase_admin.initialize_app(cred)
 
 db = firestore.client()
+def save_decisions_to_firestore(results_table):
+    today_str = datetime.date.today().strftime("%Y-%m-%d")
+    for row in results_table:
+        if row["DECISION"] != "WAIT":
+            doc_id = f"{today_str}_{row['Pair'].replace('/', '')}"
+            db.collection("trade_history").document(doc_id).set({
+                "date": today_str,
+                "pair": row["Pair"],
+                "decision": row["DECISION"],
+                "entry_price": row["Price"],
+                "stop_loss": row["Stop Loss"],
+                "take_profit": row["Take Profit"],
+                "outcome": "OPEN"
+            })
+
+def check_previous_trades():
+    docs = db.collection("trade_history").where("outcome", "==", "OPEN").stream()
+    results = []
+    for doc in docs:
+        trade = doc.to_dict()
+        pair = trade["pair"]
+
+        try:
+            if pair == "XAU/USD":
+                current_df = fetch_gold_history()
+            else:
+                fs, ts = {"USD/JPY": ("USD", "JPY"), "GBP/USD": ("GBP", "USD"), "USD/CAD": ("USD", "CAD")}[pair]
+                current_df = fetch_daily_history(fs, ts)
+            current_price = current_df["close"].iloc[-1]
+        except:
+            continue
+
+        decision = trade["decision"]
+        sl = trade["stop_loss"]
+        tp = trade["take_profit"]
+        outcome = "OPEN"
+
+        if decision == "BUY":
+            if current_price >= tp:
+                outcome = "WIN (hit take-profit)"
+            elif current_price <= sl:
+                outcome = "LOSS (hit stop-loss)"
+        else:
+            if current_price <= tp:
+                outcome = "WIN (hit take-profit)"
+            elif current_price >= sl:
+                outcome = "LOSS (hit stop-loss)"
+
+        if outcome != "OPEN":
+            db.collection("trade_history").document(doc.id).update({"outcome": outcome})
+
+        results.append({"Date": trade["date"], "Pair": pair, "Decision": decision,
+                        "Entry": trade["entry_price"], "Current/Exit": round(current_price, 4), "Outcome": outcome})
+    return results
 
 @st.cache_data(ttl=3600)
 def fetch_daily_history(from_sym, to_sym):
@@ -332,8 +386,15 @@ def run_full_analysis():
     st.session_state.results_table = results_table
     st.session_state.headlines = headlines
     st.session_state.news_bias = news_bias
+    save_decisions_to_firestore(results_table)
 
 st.divider()
+st.subheader("📜 Trade History & Results")
+past_results = check_previous_trades()
+if past_results:
+    st.dataframe(pd.DataFrame(past_results), use_container_width=True)
+else:
+    st.write("No trade history yet - results will appear here after your first analysis run.")
 
 if st.session_state.results_table is None:
     with st.spinner("Running YonKing's full analysis automatically..."):
