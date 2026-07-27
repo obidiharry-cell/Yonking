@@ -439,4 +439,31 @@ if st.session_state.results_table is not None:
         swing_low = chart_df["close"].rolling(20, min_periods=1).min().iloc[-1]
 
     fig.add_hline(y=swing_high, line_dash="dash", line_color="red", annotation_text=f"Resistance: {round(swing_high,4)}")
-    fig.add_hline(y
+    fig.add_hline(y=swing_low, line_dash="dash", line_color="green", annotation_text=f"Support: {round(swing_low,4)}")
+
+    y_prev = chart_df.iloc[-2]
+    close_p = y_prev["close"]
+    if has_ohlc:
+        high_p, low_p = y_prev["high"], y_prev["low"]
+    else:
+        high_p, low_p = close_p * 1.005, close_p * 0.995
+    pivot = (high_p + low_p + close_p) / 3
+    fig.add_hline(y=pivot, line_dash="dot", line_color="yellow", annotation_text=f"Pivot: {round(pivot,4)}")
+
+    recent_lows = chart_df["low"] if has_ohlc else chart_df["close"]
+    min_idx = recent_lows.idxmin()
+    if min_idx < len(chart_df) - 1:
+        fig.add_trace(go.Scatter(
+            x=[chart_df["date"].iloc[min_idx], chart_df["date"].iloc[-1]],
+            y=[recent_lows.iloc[min_idx], chart_df["close"].iloc[-1]],
+            mode="lines", line=dict(color="cyan", width=2, dash="solid"), name="Trend line"
+        ))
+
+    fig.update_layout(title=f"{selected_pair} - Price with Calculated Levels", template="plotly_dark",
+                       height=500, xaxis_rangeslider_visible=False)
+    st.plotly_chart(fig, use_container_width=True)
+
+    with st.expander("Headlines used for news sentiment"):
+        for h in st.session_state.headlines:
+            st.write(f"- {h}")
+    
