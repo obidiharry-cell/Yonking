@@ -119,13 +119,11 @@ if st.session_state.user_email == ADMIN_EMAIL:
                 st.success(f"Approved {data['email']}")
                 st.rerun()
 
-@st.cache_data(ttl=3600)
-def fetch_daily_history(from_sym, to_sym):
-    url = "https://www.alphavantage.co/query"
-    params = {"function": "FX_DAILY", "from_symbol": from_sym, "to_symbol": to_sym,
-              "apikey": ALPHA_KEY, "outputsize": "full"}
-    response = requests.get(url, params=params)
+response = requests.get(url, params=params)
     data = response.json()
+    if "Time Series FX (Daily)" not in data:
+        st.warning(f"⚠️ Data temporarily unavailable for {from_sym}/{to_sym} (API limit reached). Try again in a few minutes.")
+        st.stop()
     prices = data["Time Series FX (Daily)"]
     rows = []
     for date, values in prices.items():
