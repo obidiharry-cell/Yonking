@@ -5,3 +5,4 @@ scikit-learn
 requests
 plotly
 firebase-admin
+streamlit-cookies-manager
