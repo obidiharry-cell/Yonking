@@ -9,6 +9,7 @@ import firebase_admin
 from firebase_admin import credentials, firestore
 from firebase_admin import auth as firebase_auth
 import json
+from streamlit_cookies_manager import EncryptedCookieManager
 
 st.set_page_config(page_title="YonKing", page_icon="📈", layout="wide")
 
@@ -23,6 +24,10 @@ if not firebase_admin._apps:
     firebase_admin.initialize_app(cred)
 
 db = firestore.client()
+
+cookies = EncryptedCookieManager(prefix="yonking_", password=st.secrets["ALPHA_KEY"])
+if not cookies.ready():
+    st.stop()
 
 def signup_user(email, password, phone, age, location):
     try:
@@ -53,12 +58,6 @@ def login_user(email, password):
     except Exception as e:
         return False, "Invalid email or account not found."
 
-from streamlit_cookies_manager import EncryptedCookieManager
-
-cookies = EncryptedCookieManager(prefix="yonking_", password=st.secrets["ALPHA_KEY"])
-if not cookies.ready():
-    st.stop()
-
 if "logged_in" not in st.session_state:
     saved_email = cookies.get("user_email")
     if saved_email:
@@ -82,6 +81,7 @@ if not st.session_state.logged_in:
                 cookies["user_email"] = login_email
                 cookies.save()
                 st.rerun()
+            else:
                 st.error(message)
     with tab2:
         signup_email = st.text_input("Email", key="signup_email")
@@ -339,46 +339,70 @@ def calculate_trade_levels(direction, current_price, atr, swing_high, swing_low)
             take_profit_price = current_price - (atr * 1.5)
     return round(stop_loss_price, 5), round(take_profit_price, 5)
 
+def has_open_trade(pair):
+    docs = db.collection("trade_history").where("pair", "==", pair).where("outcome", "==", "OPEN").stream()
+    return any(True for _ in docs)
+
 def save_decisions_to_firestore(results_table):
     today_str = datetime.date.today().strftime("%Y-%m-%d")
+    now_str = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
     for row in results_table:
         if row["DECISION"] != "WAIT":
-            doc_id = f"{today_str}_{row['Pair'].replace('/', '')}"
+            if has_open_trade(row["Pair"]):
+                continue
+            doc_id = f"{today_str}_{row['Pair'].replace('/', '')}_{now_str.replace(' ','').replace(':','')}"
             db.collection("trade_history").document(doc_id).set({
                 "date": today_str, "pair": row["Pair"], "decision": row["DECISION"],
                 "entry_price": row["Price"], "stop_loss": row["Stop Loss"],
-                "take_profit": row["Take Profit"], "outcome": "OPEN"
+                "take_profit": row["Take Profit"], "outcome": "OPEN",
+                "opened_at": now_str, "closed_at": ""
             })
 
 def check_previous_trades():
-    docs = db.collection("trade_history").where("outcome", "==", "OPEN").stream()
+    docs = db.collection("trade_history").stream()
     results = []
     for doc in docs:
         trade = doc.to_dict()
         pair = trade["pair"]
-        try:
-            if pair == "XAU/USD":
-                current_df = fetch_gold_history()
+        outcome = trade.get("outcome", "OPEN")
+
+        if outcome == "OPEN":
+            try:
+                if pair == "XAU/USD":
+                    current_df = fetch_gold_history()
+                else:
+                    fs, ts = {"USD/JPY": ("USD", "JPY"), "GBP/USD": ("GBP", "USD"), "USD/CAD": ("USD", "CAD")}[pair]
+                    current_df = fetch_daily_history(fs, ts)
+                current_price = current_df["close"].iloc[-1]
+            except:
+                continue
+
+            decision = trade["decision"]
+            sl = trade["stop_loss"]
+            tp = trade["take_profit"]
+
+            if decision == "BUY":
+                if current_price >= tp: outcome = "WIN"
+                elif current_price <= sl: outcome = "LOSS"
             else:
-                fs, ts = {"USD/JPY": ("USD", "JPY"), "GBP/USD": ("GBP", "USD"), "USD/CAD": ("USD", "CAD")}[pair]
-                current_df = fetch_daily_history(fs, ts)
-            current_price = current_df["close"].iloc[-1]
-        except:
-            continue
-        decision = trade["decision"]
-        sl = trade["stop_loss"]
-        tp = trade["take_profit"]
-        outcome = "OPEN"
-        if decision == "BUY":
-            if current_price >= tp: outcome = "WIN (hit take-profit)"
-            elif current_price <= sl: outcome = "LOSS (hit stop-loss)"
-        else:
-            if current_price <= tp: outcome = "WIN (hit take-profit)"
-            elif current_price >= sl: outcome = "LOSS (hit stop-loss)"
-        if outcome != "OPEN":
-            db.collection("trade_history").document(doc.id).update({"outcome": outcome})
-        results.append({"Date": trade["date"], "Pair": pair, "Decision": decision,
-                        "Entry": trade["entry_price"], "Current/Exit": round(current_price, 4), "Outcome": outcome})
+                if current_price <= tp: outcome = "WIN"
+                elif current_price >= sl: outcome = "LOSS"
+
+            if outcome != "OPEN":
+                now_str = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
+                db.collection("trade_history").document(doc.id).update({"outcome": outcome, "closed_at": now_str, "exit_price": round(current_price, 5)})
+                trade["closed_at"] = now_str
+                trade["exit_price"] = round(current_price, 5)
+            else:
+                trade["exit_price"] = round(current_price, 4)
+
+        results.append({
+            "Pair": pair, "Decision": trade["decision"], "Entry": trade["entry_price"],
+            "Exit/Current": trade.get("exit_price", "-"),
+            "Opened": trade.get("opened_at", trade.get("date", "-")),
+            "Closed": trade.get("closed_at", "OPEN") if outcome != "OPEN" else "OPEN",
+            "Status": outcome
+        })
     return results
 
 now_utc = datetime.datetime.utcnow()
@@ -473,7 +497,14 @@ st.divider()
 st.subheader("📜 Trade History & Results")
 past_results = check_previous_trades()
 if past_results:
-    st.dataframe(pd.DataFrame(past_results), use_container_width=True)
+    df_results = pd.DataFrame(past_results)
+    def color_status(row):
+        if row["Status"] == "WIN":
+            return ["background-color: #1a4d2e"] * len(row)
+        elif row["Status"] == "LOSS":
+            return ["background-color: #5c1a1a"] * len(row)
+        return [""] * len(row)
+    st.dataframe(df_results.style.apply(color_status, axis=1), use_container_width=True)
 else:
     st.write("No trade history yet - results will appear here after your first analysis run.")
 
