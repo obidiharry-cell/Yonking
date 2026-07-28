@@ -53,9 +53,20 @@ def login_user(email, password):
     except Exception as e:
         return False, "Invalid email or account not found."
 
+from streamlit_cookies_manager import EncryptedCookieManager
+
+cookies = EncryptedCookieManager(prefix="yonking_", password=st.secrets["ALPHA_KEY"])
+if not cookies.ready():
+    st.stop()
+
 if "logged_in" not in st.session_state:
-    st.session_state.logged_in = False
-    st.session_state.user_email = None
+    saved_email = cookies.get("user_email")
+    if saved_email:
+        st.session_state.logged_in = True
+        st.session_state.user_email = saved_email
+    else:
+        st.session_state.logged_in = False
+        st.session_state.user_email = None
 
 if not st.session_state.logged_in:
     st.title("📈 Welcome to YonKing")
@@ -68,8 +79,9 @@ if not st.session_state.logged_in:
             if success:
                 st.session_state.logged_in = True
                 st.session_state.user_email = login_email
+                cookies["user_email"] = login_email
+                cookies.save()
                 st.rerun()
-            else:
                 st.error(message)
     with tab2:
         signup_email = st.text_input("Email", key="signup_email")
@@ -92,6 +104,8 @@ st.sidebar.write(f"Logged in as: {st.session_state.user_email}")
 if st.sidebar.button("Logout"):
     st.session_state.logged_in = False
     st.session_state.user_email = None
+    cookies["user_email"] = ""
+    cookies.save()
     st.rerun()
 
 ADMIN_EMAIL = "obidiharry@gmail.com"
