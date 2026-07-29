@@ -108,15 +108,14 @@ if st.sidebar.button("Logout"):
     cookies.save()
     st.rerun()
 
-if st.sidebar.button("TEST: Check intraday data amount"):
-    params = {"symbol": "USD/JPY", "interval": "1h", "outputsize": 5000, "apikey": TWELVE_KEY}
-    r = requests.get("https://api.twelvedata.com/time_series", params=params).json()
-    if "values" in r:
-        st.sidebar.write(f"Got {len(r['values'])} hourly candles")
-        st.sidebar.write(f"Oldest: {r['values'][-1]['datetime']}")
-        st.sidebar.write(f"Newest: {r['values'][0]['datetime']}")
-    else:
-        st.sidebar.write(r)
+if st.sidebar.button("TEST: Backtest 1H model honestly"):
+    for pair in ["USD/JPY", "GBP/USD", "USD/CAD", "XAU/USD"]:
+        result = backtest_intraday_model(pair, "1h")
+        if result:
+            win_rate, wins, losses, total_candles = result
+            st.sidebar.write(f"**{pair}** ({total_candles} candles): {win_rate:.2f}% win rate ({wins}W/{losses}L)")
+        else:
+            st.sidebar.write(f"{pair}: data unavailable")
 
 ADMIN_EMAIL = "obidiharry@gmail.com"
 if st.session_state.user_email == ADMIN_EMAIL:
@@ -309,6 +308,63 @@ def analyze_intraday_signal(pair, interval):
     swing_high = df["close"].rolling(20).max().iloc[-1]
     swing_low = df["close"].rolling(20).min().iloc[-1]
     return direction, current_price, atr, (swing_high, swing_low)
+
+def backtest_intraday_model(pair, interval):
+    symbol = twelvedata_symbols[pair]
+    params = {"symbol": symbol, "interval": interval, "outputsize": 5000, "apikey": TWELVE_KEY}
+    r = requests.get("https://api.twelvedata.com/time_series", params=params).json()
+    if "values" not in r:
+        return None
+
+    df = pd.DataFrame(r["values"])
+    df["close"] = df["close"].astype(float)
+    df["high"] = df["high"].astype(float) if "high" in df else df["close"]
+    df["low"] = df["low"].astype(float) if "low" in df else df["close"]
+    df = df.iloc[::-1].reset_index(drop=True)
+
+    df["next_close"] = df["close"].shift(-1)
+    df["target"] = (df["next_close"] > df["close"]).astype(int)
+    df["change_1"] = df["close"].diff(1)
+    df["change_3"] = df["close"].diff(3)
+    df["ma_5"] = df["close"].rolling(5).mean()
+    df["ma_20"] = df["close"].rolling(20).mean()
+    df["ma_diff"] = df["ma_5"] - df["ma_20"]
+    delta = df["close"].diff()
+    gain = delta.where(delta > 0, 0)
+    loss = -delta.where(delta < 0, 0)
+    rs = gain.rolling(14).mean() / loss.rolling(14).mean()
+    df["rsi"] = 100 - (100 / (1 + rs))
+    df["ema_12"] = df["close"].ewm(span=12, adjust=False).mean()
+    df["ema_26"] = df["close"].ewm(span=26, adjust=False).mean()
+    df["macd"] = df["ema_12"] - df["ema_26"]
+    df["macd_signal"] = df["macd"].ewm(span=9, adjust=False).mean()
+    df["macd_hist"] = df["macd"] - df["macd_signal"]
+    df["bb_mid"] = df["close"].rolling(20).mean()
+    df["bb_std"] = df["close"].rolling(20).std()
+    df["bb_position"] = (df["close"] - (df["bb_mid"] - 2*df["bb_std"])) / (4*df["bb_std"])
+    df = df.dropna().reset_index(drop=True)
+
+    feats = ["change_1", "change_3", "ma_diff", "rsi", "macd", "macd_hist", "bb_position"]
+
+    split = int(len(df) * 0.8)
+    train, test = df.iloc[:split], df.iloc[split:].copy()
+
+    model = RandomForestClassifier(n_estimators=200, max_depth=5, random_state=42)
+    model.fit(train[feats], train["target"])
+    test["prob_up"] = model.predict_proba(test[feats])[:, 1]
+
+    wins, losses = 0, 0
+    for i in range(len(test) - 1):
+        p = test["prob_up"].iloc[i]
+        if p >= 0.55: d = 1
+        elif p <= 0.45: d = -1
+        else: continue
+        change = (test["close"].iloc[i+1] - test["close"].iloc[i]) / test["close"].iloc[i]
+        if (d == 1 and change > 0) or (d == -1 and change < 0): wins += 1
+        else: losses += 1
+
+    win_rate = (wins/(wins+losses)*100) if (wins+losses) > 0 else 0
+    return win_rate, wins, losses, len(df)
 
 @st.cache_data(ttl=21600)
 def get_cot_positioning(contract_name, dataset_url, field_prefix, suffix=""):
