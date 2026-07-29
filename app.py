@@ -281,6 +281,25 @@ def get_timeframe_direction(pair):
     down = list(results.values()).count("DOWN")
     return "BUY" if up > down else ("SELL" if down > up else "NEUTRAL")
 
+def analyze_intraday_signal(pair, interval):
+    symbol = twelvedata_symbols[pair]
+    df = fetch_intraday(symbol, interval)
+    if df is None or len(df) < 20:
+        return "WAIT", None, None, None
+    df["ma_5"] = df["close"].rolling(5).mean()
+    df["ma_10"] = df["close"].rolling(10).mean()
+    current_price = df["close"].iloc[-1]
+    ma5 = df["ma_5"].iloc[-1]
+    ma10 = df["ma_10"].iloc[-1]
+    if pd.isna(ma5) or pd.isna(ma10):
+        return "WAIT", None, None, None
+    direction = "BUY" if ma5 > ma10 and current_price > ma5 else ("SELL" if ma5 < ma10 and current_price < ma5 else "WAIT")
+    df["tr"] = (df["close"] - df["close"].shift(1)).abs()
+    atr = df["tr"].rolling(14).mean().iloc[-1]
+    swing_high = df["close"].rolling(20).max().iloc[-1]
+    swing_low = df["close"].rolling(20).min().iloc[-1]
+    return direction, current_price, atr, (swing_high, swing_low)
+
 @st.cache_data(ttl=21600)
 def get_cot_positioning(contract_name, dataset_url, field_prefix, suffix=""):
     params = {"$where": f"market_and_exchange_names = '{contract_name}'",
@@ -339,20 +358,21 @@ def calculate_trade_levels(direction, current_price, atr, swing_high, swing_low)
             take_profit_price = current_price - (atr * 1.5)
     return round(stop_loss_price, 5), round(take_profit_price, 5)
 
-def has_open_trade(pair):
-    docs = db.collection("trade_history").where("pair", "==", pair).where("outcome", "==", "OPEN").stream()
+def has_open_trade(pair, timeframe="Daily"):
+    docs = db.collection("trade_history").where("pair", "==", pair).where("timeframe", "==", timeframe).where("outcome", "==", "OPEN").stream()
     return any(True for _ in docs)
 
 def save_decisions_to_firestore(results_table):
     today_str = datetime.date.today().strftime("%Y-%m-%d")
     now_str = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
     for row in results_table:
+        tf_label = row.get("Timeframe_Label", "Daily")
         if row["DECISION"] != "WAIT":
-            if has_open_trade(row["Pair"]):
+            if has_open_trade(row["Pair"], tf_label):
                 continue
-            doc_id = f"{today_str}_{row['Pair'].replace('/', '')}_{now_str.replace(' ','').replace(':','')}"
+            doc_id = f"{today_str}_{row['Pair'].replace('/', '')}_{tf_label}_{now_str.replace(' ','').replace(':','')}"
             db.collection("trade_history").document(doc_id).set({
-                "date": today_str, "pair": row["Pair"], "decision": row["DECISION"],
+                "date": today_str, "pair": row["Pair"], "timeframe": tf_label, "decision": row["DECISION"],
                 "entry_price": row["Price"], "stop_loss": row["Stop Loss"],
                 "take_profit": row["Take Profit"], "outcome": "OPEN",
                 "opened_at": now_str, "closed_at": ""
@@ -365,7 +385,6 @@ def check_previous_trades():
         trade = doc.to_dict()
         pair = trade["pair"]
         outcome = trade.get("outcome", "OPEN")
-
         if outcome == "OPEN":
             try:
                 if pair == "XAU/USD":
@@ -376,18 +395,15 @@ def check_previous_trades():
                 current_price = current_df["close"].iloc[-1]
             except:
                 continue
-
             decision = trade["decision"]
             sl = trade["stop_loss"]
             tp = trade["take_profit"]
-
             if decision == "BUY":
                 if current_price >= tp: outcome = "WIN"
                 elif current_price <= sl: outcome = "LOSS"
             else:
                 if current_price <= tp: outcome = "WIN"
                 elif current_price >= sl: outcome = "LOSS"
-
             if outcome != "OPEN":
                 now_str = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
                 db.collection("trade_history").document(doc.id).update({"outcome": outcome, "closed_at": now_str, "exit_price": round(current_price, 5)})
@@ -395,10 +411,9 @@ def check_previous_trades():
                 trade["exit_price"] = round(current_price, 5)
             else:
                 trade["exit_price"] = round(current_price, 4)
-
         results.append({
-            "Pair": pair, "Decision": trade["decision"], "Entry": trade["entry_price"],
-            "Exit/Current": trade.get("exit_price", "-"),
+            "Pair": pair, "Timeframe": trade.get("timeframe", "Daily"), "Decision": trade["decision"],
+            "Entry": trade["entry_price"], "Exit/Current": trade.get("exit_price", "-"),
             "Opened": trade.get("opened_at", trade.get("date", "-")),
             "Closed": trade.get("closed_at", "OPEN") if outcome != "OPEN" else "OPEN",
             "Status": outcome
@@ -454,7 +469,7 @@ def run_full_analysis():
             "Pair": pair, "Price": round(current_price, 4), "Price Model": f"{price_dir} ({win_rate}%)",
             "News": news_dir, "Timeframe": tf_dir, "COT": cot_dir, "Pivot": pivot_dir,
             "Buy Conf": f"{buy_conf}%", "Sell Conf": f"{sell_conf}%", "DECISION": decision,
-            "Stop Loss": sl_price, "Take Profit": tp_price
+            "Stop Loss": sl_price, "Take Profit": tp_price, "Timeframe_Label": "Daily"
         })
 
     gold_raw = fetch_gold_history()
@@ -485,8 +500,20 @@ def run_full_analysis():
         "Pair": "XAU/USD", "Price": round(current_price, 4), "Price Model": f"{price_dir} ({win_rate}%)",
         "News": news_dir, "Timeframe": tf_dir, "COT": cot_dir, "Pivot": pivot_dir,
         "Buy Conf": f"{buy_conf}%", "Sell Conf": f"{sell_conf}%", "DECISION": decision,
-        "Stop Loss": sl_price, "Take Profit": tp_price
+        "Stop Loss": sl_price, "Take Profit": tp_price, "Timeframe_Label": "Daily"
     })
+
+    for pair in ["USD/JPY", "GBP/USD", "USD/CAD", "XAU/USD"]:
+        for interval, label in [("4h", "4H"), ("1h", "1H")]:
+            direction, price, atr, levels = analyze_intraday_signal(pair, interval)
+            if direction != "WAIT" and price and atr:
+                swing_high, swing_low = levels
+                sl, tp = calculate_trade_levels(direction, price, atr, swing_high, swing_low)
+                results_table.append({
+                    "Pair": pair, "Price": round(price, 4), "Price Model": "-", "News": "-", "Timeframe": label,
+                    "COT": "-", "Pivot": "-", "Buy Conf": "-", "Sell Conf": "-", "DECISION": direction,
+                    "Stop Loss": sl, "Take Profit": tp, "Timeframe_Label": label
+                })
 
     st.session_state.results_table = results_table
     st.session_state.headlines = headlines
