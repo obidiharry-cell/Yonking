@@ -108,6 +108,16 @@ if st.sidebar.button("Logout"):
     cookies.save()
     st.rerun()
 
+if st.sidebar.button("TEST: Check intraday data amount"):
+    params = {"symbol": "USD/JPY", "interval": "1h", "outputsize": 5000, "apikey": TWELVE_KEY}
+    r = requests.get("https://api.twelvedata.com/time_series", params=params).json()
+    if "values" in r:
+        st.sidebar.write(f"Got {len(r['values'])} hourly candles")
+        st.sidebar.write(f"Oldest: {r['values'][-1]['datetime']}")
+        st.sidebar.write(f"Newest: {r['values'][0]['datetime']}")
+    else:
+        st.sidebar.write(r)
+
 ADMIN_EMAIL = "obidiharry@gmail.com"
 if st.session_state.user_email == ADMIN_EMAIL:
     with st.sidebar.expander("🔑 Admin Panel"):
