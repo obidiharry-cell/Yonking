@@ -503,8 +503,11 @@ def run_full_analysis():
         "Stop Loss": sl_price, "Take Profit": tp_price, "Timeframe_Label": "Daily"
     })
 
+    ENABLE_INTRADAY_TRADING = False  # disabled until properly backtested
     for pair in ["USD/JPY", "GBP/USD", "USD/CAD", "XAU/USD"]:
         for interval, label in [("4h", "4H"), ("1h", "1H")]:
+            if not ENABLE_INTRADAY_TRADING:
+                continue
             direction, price, atr, levels = analyze_intraday_signal(pair, interval)
             if direction != "WAIT" and price and atr:
                 swing_high, swing_low = levels
