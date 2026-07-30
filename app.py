@@ -427,7 +427,7 @@ def calculate_trade_levels(direction, current_price, atr, swing_high, swing_low)
             take_profit_price = swing_high - (atr * 0.2)
             if take_profit_price <= current_price:
                 take_profit_price = current_price + (atr * 1.5)
-                else:
+  else:
             take_profit_price = current_price + (atr * 1.5)
     else:
         dist_to_resist = swing_high - current_price
