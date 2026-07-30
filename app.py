@@ -415,6 +415,66 @@ def get_pivot_direction(df, has_ohlc=True):
     pivot = (high + low + close) / 3
     return "BUY" if df["close"].iloc[-1] > pivot else "SELL"
 
+def detect_liquidity_sweep_and_retest(df, has_ohlc=True):
+    lookback = 20
+    if len(df) < lookback + 5:
+        return False, False
+
+    recent = df.iloc[-lookback-5:-1]
+    current = df.iloc[-1]
+
+    if has_ohlc:
+        prior_high = recent["high"].iloc[:-1].max()
+        prior_low = recent["low"].iloc[:-1].min()
+        swept_high = recent["high"].iloc[-1] > prior_high and current["close"] < prior_high
+        swept_low = recent["low"].iloc[-1] < prior_low and current["close"] > prior_low
+    else:
+        prior_high = recent["close"].iloc[:-1].max()
+        prior_low = recent["close"].iloc[:-1].min()
+        swept_high = recent["close"].iloc[-1] > prior_high and current["close"] < prior_high
+        swept_low = recent["close"].iloc[-1] < prior_low and current["close"] > prior_low
+
+    liquidity_sweep = swept_high or swept_low
+
+    price_range = df["close"].tail(5).max() - df["close"].tail(5).min()
+    avg_range = df["close"].diff().abs().tail(20).mean()
+    retest_happening = price_range < (avg_range * 2) if avg_range > 0 else False
+
+    return liquidity_sweep, retest_happening
+
+def calculate_confidence_score(price_dir, daily_dir, tf_4h_dir, tf_1h_dir, bos_detected,
+                                 retest_detected, atr_expanding, rsi_value, macd_agrees, news_favorable):
+    score = 0
+    if daily_dir == price_dir:
+        score += 15
+    if tf_4h_dir == price_dir:
+        score += 15
+    if tf_1h_dir == price_dir:
+        score += 10
+    if bos_detected:
+        score += 15
+    if retest_detected:
+        score += 15
+    if atr_expanding:
+        score += 10
+    if macd_agrees:
+        score += 5
+    if 45 <= rsi_value <= 65:
+        score += 5
+    if news_favorable:
+        score += 10
+    return score
+
+def get_confidence_label(score):
+    if score < 60:
+        return "NO TRADE"
+    elif score < 75:
+        return "MEDIUM"
+    elif score < 85:
+        return "HIGH"
+    else:
+        return "VERY HIGH"
+
 def calculate_trade_levels(direction, current_price, atr, swing_high, swing_low):
     if direction == "BUY":
         dist_to_support = current_price - swing_low
