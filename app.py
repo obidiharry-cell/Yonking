@@ -165,9 +165,9 @@ def backtest_intraday_model(pair, interval, twelvedata_symbols_map):
 
 twelvedata_symbols = {"USD/JPY": "USD/JPY", "GBP/USD": "GBP/USD", "USD/CAD": "USD/CAD", "XAU/USD": "XAU/USD"}
 
-if st.sidebar.button("TEST: Backtest 1H model honestly"):
+if st.sidebar.button("TEST: Backtest 4H model honestly"):
     for pair in ["USD/JPY", "GBP/USD", "USD/CAD", "XAU/USD"]:
-        result = backtest_intraday_model(pair, "1h", twelvedata_symbols)
+        result = backtest_intraday_model(pair, "4h", twelvedata_symbols)
         if result:
             win_rate, wins, losses, total_candles = result
             st.sidebar.write(f"**{pair}** ({total_candles} candles): {win_rate:.2f}% win rate ({wins}W/{losses}L)")
