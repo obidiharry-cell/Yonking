@@ -350,21 +350,6 @@ def get_timeframe_direction(pair):
     down = list(results.values()).count("DOWN")
     return "BUY" if up > down else ("SELL" if down > up else "NEUTRAL")
 
-def analyze_intraday_signal(pair, interval):
-    try:
-                    direction, price, atr, levels, score = analyze_intraday_signal(pair, interval, "BUY" if buy_conf >= 60 else ("SELL" if sell_conf >= 60 else "WAIT"))
-                    if direction != "WAIT" and price and atr and levels:
-                        swing_high, swing_low = levels
-                        sl, tp = calculate_trade_levels(direction, price, atr, swing_high, swing_low)
-                        results_table.append({
-                            "Pair": pair, "Price": round(price, 4), "Price Model": "-", "News": "-",
-                            "Timeframe": label, "COT": "-", "Pivot": "-", "Buy Conf": "-", "Sell Conf": f"Score: {score}",
-                            "DECISION": direction, "Stop Loss": sl, "Take Profit": tp, "Timeframe_Label": label
-                        })
-                except Exception as e:
-                    st.sidebar.write(f"⚠️ Skipped {pair} {label} due to error: {str(e)[:50]}")
-                    continue
-
 @st.cache_data(ttl=21600)
 def get_cot_positioning(contract_name, dataset_url, field_prefix, suffix=""):
     params = {"$where": f"market_and_exchange_names = '{contract_name}'",
@@ -398,10 +383,8 @@ def detect_liquidity_sweep_and_retest(df, has_ohlc=True):
     lookback = 20
     if len(df) < lookback + 5:
         return False, False
-
     recent = df.iloc[-lookback-5:-1]
     current = df.iloc[-1]
-
     if has_ohlc:
         prior_high = recent["high"].iloc[:-1].max()
         prior_low = recent["low"].iloc[:-1].min()
@@ -412,13 +395,10 @@ def detect_liquidity_sweep_and_retest(df, has_ohlc=True):
         prior_low = recent["close"].iloc[:-1].min()
         swept_high = recent["close"].iloc[-1] > prior_high and current["close"] < prior_high
         swept_low = recent["close"].iloc[-1] < prior_low and current["close"] > prior_low
-
     liquidity_sweep = swept_high or swept_low
-
     price_range = df["close"].tail(5).max() - df["close"].tail(5).min()
     avg_range = df["close"].diff().abs().tail(20).mean()
     retest_happening = price_range < (avg_range * 2) if avg_range > 0 else False
-
     return liquidity_sweep, retest_happening
 
 def calculate_confidence_score(price_dir, daily_dir, tf_4h_dir, tf_1h_dir, bos_detected,
@@ -458,20 +438,17 @@ def calculate_adx(df, period=14):
     high = df["high"] if "high" in df.columns else df["close"]
     low = df["low"] if "low" in df.columns else df["close"]
     close = df["close"]
-
     plus_dm = high.diff()
     minus_dm = -low.diff()
     plus_dm[plus_dm < 0] = 0
     minus_dm[minus_dm < 0] = 0
     plus_dm[(plus_dm - minus_dm) < 0] = 0
     minus_dm[(minus_dm - plus_dm) < 0] = 0
-
     tr1 = high - low
     tr2 = abs(high - close.shift(1))
     tr3 = abs(low - close.shift(1))
     tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
     atr = tr.rolling(period).mean()
-
     plus_di = 100 * (plus_dm.rolling(period).mean() / atr)
     minus_di = 100 * (minus_dm.rolling(period).mean() / atr)
     dx = 100 * abs(plus_di - minus_di) / (plus_di + minus_di)
@@ -493,7 +470,6 @@ def detect_fair_value_gap(df, direction, has_ohlc=True):
     else:
         c1_high = c1_low = df["close"].iloc[-3]
         c3_high = c3_low = df["close"].iloc[-1]
-
     if direction == "BUY":
         return c3_low > c1_high
     else:
@@ -527,6 +503,71 @@ def calculate_trade_levels(direction, current_price, atr, swing_high, swing_low)
         else:
             take_profit_price = current_price - (atr * 1.5)
     return round(stop_loss_price, 5), round(take_profit_price, 5)
+
+def analyze_intraday_signal(pair, interval, daily_dir):
+    try:
+        symbol = twelvedata_symbols[pair]
+        df = fetch_intraday(symbol, interval)
+        if df is None or len(df) < 30:
+            return "WAIT", None, None, None, 0
+
+        df["ma_5"] = df["close"].rolling(5).mean()
+        df["ma_20"] = df["close"].rolling(20).mean()
+        delta = df["close"].diff()
+        gain = delta.where(delta > 0, 0)
+        loss = -delta.where(delta < 0, 0)
+        rs = gain.rolling(14).mean() / loss.rolling(14).mean()
+        df["rsi"] = 100 - (100 / (1 + rs))
+        df["ema_12"] = df["close"].ewm(span=12, adjust=False).mean()
+        df["ema_26"] = df["close"].ewm(span=26, adjust=False).mean()
+        df["macd"] = df["ema_12"] - df["ema_26"]
+        df["macd_signal_line"] = df["macd"].ewm(span=9, adjust=False).mean()
+        df["macd_hist"] = df["macd"] - df["macd_signal_line"]
+        df["tr"] = (df["close"] - df["close"].shift(1)).abs()
+        df["atr"] = df["tr"].rolling(14).mean()
+
+        current_price = df["close"].iloc[-1]
+        ma5 = df["ma_5"].iloc[-1]
+        ma20 = df["ma_20"].iloc[-1]
+        rsi = df["rsi"].iloc[-1]
+        macd_hist = df["macd_hist"].iloc[-1]
+        atr_now = df["atr"].iloc[-1]
+        atr_avg = df["atr"].tail(20).mean()
+
+        if pd.isna(ma5) or pd.isna(ma20) or pd.isna(rsi) or pd.isna(atr_now):
+            return "WAIT", None, None, None, 0
+
+        candidate_dir = "BUY" if ma5 > ma20 else "SELL"
+
+        adx = calculate_adx(df)
+        liquidity_sweep, retest = detect_liquidity_sweep_and_retest(df, has_ohlc=False)
+        fvg = detect_fair_value_gap(df, candidate_dir, has_ohlc=False)
+        session_ok = is_good_trading_session()
+        atr_expanding = atr_now > atr_avg
+        macd_agrees = (macd_hist > 0 and candidate_dir == "BUY") or (macd_hist < 0 and candidate_dir == "SELL")
+
+        swing_high = df["close"].rolling(20).max().iloc[-1]
+        swing_low = df["close"].rolling(20).min().iloc[-1]
+        bos_detected = (candidate_dir == "BUY" and current_price > swing_high * 0.999) or \
+                       (candidate_dir == "SELL" and current_price < swing_low * 1.001)
+
+        score = calculate_confidence_score(
+            price_dir=candidate_dir, daily_dir=daily_dir, tf_4h_dir=candidate_dir, tf_1h_dir=candidate_dir,
+            bos_detected=bos_detected, retest_detected=(retest or fvg), atr_expanding=atr_expanding,
+            rsi_value=rsi, macd_agrees=macd_agrees, news_favorable=True
+        )
+
+        if adx < 20:
+            score -= 20
+        if not session_ok:
+            score -= 15
+
+        if score < 60:
+            return "WAIT", current_price, atr_now, (swing_high, swing_low), score
+
+        return candidate_dir, current_price, atr_now, (swing_high, swing_low), score
+    except Exception:
+        return "WAIT", None, None, None, 0
 
 def has_open_trade(pair, timeframe="Daily"):
     docs = db.collection("trade_history").where("pair", "==", pair).where("timeframe", "==", timeframe).where("outcome", "==", "OPEN").stream()
@@ -609,11 +650,13 @@ if "results_table" not in st.session_state:
 def run_full_analysis():
     news_bias, headlines = get_news_sentiment()
     results_table = []
+    daily_directions = {}
     currency_pairs = {"USD/JPY": ("USD", "JPY"), "GBP/USD": ("GBP", "USD"), "USD/CAD": ("USD", "CAD")}
     for pair, (fs, ts) in currency_pairs.items():
         raw_df = fetch_daily_history(fs, ts)
         featured_df = build_features(raw_df, True)
         win_rate, price_dir, current_price = analyze_price_model(featured_df)
+        daily_directions[pair] = price_dir
         news_dir = get_news_direction(pair, news_bias)
         tf_dir = get_timeframe_direction(pair)
         contract, url, prefix, suffix = cot_contracts[pair]
@@ -645,6 +688,7 @@ def run_full_analysis():
     gold_raw = fetch_gold_history()
     gold_featured = build_features(gold_raw, False)
     win_rate, price_dir, current_price = analyze_price_model(gold_featured)
+    daily_directions["XAU/USD"] = price_dir
     news_dir = get_news_direction("XAU/USD", news_bias)
     tf_dir = get_timeframe_direction("XAU/USD")
     contract, url, prefix, suffix = cot_contracts["XAU/USD"]
@@ -673,28 +717,25 @@ def run_full_analysis():
         "Stop Loss": sl_price, "Take Profit": tp_price, "Timeframe_Label": "Daily"
     })
 
-    ENABLE_INTRADAY_TRADING = True
-    intraday_allowed = {
-        "1H": ["USD/JPY", "USD/CAD", "XAU/USD"],
-        "4H": ["GBP/USD"]
-    }
+    intraday_allowed = {"1H": ["USD/JPY", "USD/CAD", "XAU/USD"], "4H": ["GBP/USD"]}
 
-    if ENABLE_INTRADAY_TRADING:
-        for label, interval in [("1H", "1h"), ("4H", "4h")]:
-            for pair in intraday_allowed[label]:
-                try:
-                    direction, price, atr, levels = analyze_intraday_signal(pair, interval)
-                    if direction != "WAIT" and price and atr and levels:
-                        swing_high, swing_low = levels
-                        sl, tp = calculate_trade_levels(direction, price, atr, swing_high, swing_low)
-                        results_table.append({
-                            "Pair": pair, "Price": round(price, 4), "Price Model": "-", "News": "-",
-                            "Timeframe": label, "COT": "-", "Pivot": "-", "Buy Conf": "-", "Sell Conf": "-",
-                            "DECISION": direction, "Stop Loss": sl, "Take Profit": tp, "Timeframe_Label": label
-                        })
-                except Exception as e:
-                    st.sidebar.write(f"⚠️ Skipped {pair} {label} due to error: {str(e)[:50]}")
-                    continue
+    for label, interval in [("1H", "1h"), ("4H", "4h")]:
+        for pair in intraday_allowed[label]:
+            try:
+                daily_dir_for_pair = daily_directions.get(pair, "WAIT")
+                direction, price, atr, levels, score = analyze_intraday_signal(pair, interval, daily_dir_for_pair)
+                if direction != "WAIT" and price and atr and levels:
+                    swing_high, swing_low = levels
+                    sl, tp = calculate_trade_levels(direction, price, atr, swing_high, swing_low)
+                    results_table.append({
+                        "Pair": pair, "Price": round(price, 4), "Price Model": "-", "News": "-",
+                        "Timeframe": label, "COT": "-", "Pivot": "-", "Buy Conf": "-",
+                        "Sell Conf": f"Score: {score}", "DECISION": direction,
+                        "Stop Loss": sl, "Take Profit": tp, "Timeframe_Label": label
+                    })
+            except Exception as e:
+                st.sidebar.write(f"⚠️ Skipped {pair} {label} due to error: {str(e)[:50]}")
+                continue
 
     st.session_state.results_table = results_table
     st.session_state.headlines = headlines
