@@ -437,7 +437,7 @@ def get_confidence_label(score):
 def calculate_adx(df, period=14):
     high = df["high"] if "high" in df.columns else df["close"]
     low = df["low"] if "low" in df.columns else df["close"]
-    close = df["close"]
+   close = df["close"]
     plus_dm = high.diff()
     minus_dm = -low.diff()
     plus_dm[plus_dm < 0] = 0
