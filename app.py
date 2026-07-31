@@ -352,39 +352,18 @@ def get_timeframe_direction(pair):
 
 def analyze_intraday_signal(pair, interval):
     try:
-        symbol = twelvedata_symbols[pair]
-        df = fetch_intraday(symbol, interval)
-        if df is None or len(df) < 20:
-            return "WAIT", None, None, None
-        df["ma_5"] = df["close"].rolling(5).mean()
-        df["ma_10"] = df["close"].rolling(10).mean()
-        delta = df["close"].diff()
-        gain = delta.where(delta > 0, 0)
-        loss = -delta.where(delta < 0, 0)
-        rs = gain.rolling(14).mean() / loss.rolling(14).mean()
-        df["rsi"] = 100 - (100 / (1 + rs))
-        current_price = df["close"].iloc[-1]
-        ma5 = df["ma_5"].iloc[-1]
-        ma10 = df["ma_10"].iloc[-1]
-        rsi = df["rsi"].iloc[-1]
-        if pd.isna(ma5) or pd.isna(ma10) or pd.isna(rsi):
-            return "WAIT", None, None, None
-        ma_bullish = ma5 > ma10 and current_price > ma5
-        ma_bearish = ma5 < ma10 and current_price < ma5
-        direction = "WAIT"
-        if ma_bullish and rsi < 70:
-            direction = "BUY"
-        elif ma_bearish and rsi > 30:
-            direction = "SELL"
-        df["tr"] = (df["close"] - df["close"].shift(1)).abs()
-        atr = df["tr"].rolling(14).mean().iloc[-1]
-        swing_high = df["close"].rolling(20).max().iloc[-1]
-        swing_low = df["close"].rolling(20).min().iloc[-1]
-        if pd.isna(atr):
-            return "WAIT", None, None, None
-        return direction, current_price, atr, (swing_high, swing_low)
-    except Exception:
-        return "WAIT", None, None, None
+                    direction, price, atr, levels, score = analyze_intraday_signal(pair, interval, "BUY" if buy_conf >= 60 else ("SELL" if sell_conf >= 60 else "WAIT"))
+                    if direction != "WAIT" and price and atr and levels:
+                        swing_high, swing_low = levels
+                        sl, tp = calculate_trade_levels(direction, price, atr, swing_high, swing_low)
+                        results_table.append({
+                            "Pair": pair, "Price": round(price, 4), "Price Model": "-", "News": "-",
+                            "Timeframe": label, "COT": "-", "Pivot": "-", "Buy Conf": "-", "Sell Conf": f"Score: {score}",
+                            "DECISION": direction, "Stop Loss": sl, "Take Profit": tp, "Timeframe_Label": label
+                        })
+                except Exception as e:
+                    st.sidebar.write(f"⚠️ Skipped {pair} {label} due to error: {str(e)[:50]}")
+                    continue
 
 @st.cache_data(ttl=21600)
 def get_cot_positioning(contract_name, dataset_url, field_prefix, suffix=""):
