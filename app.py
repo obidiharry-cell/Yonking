@@ -475,6 +475,51 @@ def get_confidence_label(score):
     else:
         return "VERY HIGH"
 
+def calculate_adx(df, period=14):
+    high = df["high"] if "high" in df.columns else df["close"]
+    low = df["low"] if "low" in df.columns else df["close"]
+    close = df["close"]
+
+    plus_dm = high.diff()
+    minus_dm = -low.diff()
+    plus_dm[plus_dm < 0] = 0
+    minus_dm[minus_dm < 0] = 0
+    plus_dm[(plus_dm - minus_dm) < 0] = 0
+    minus_dm[(minus_dm - plus_dm) < 0] = 0
+
+    tr1 = high - low
+    tr2 = abs(high - close.shift(1))
+    tr3 = abs(low - close.shift(1))
+    tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+    atr = tr.rolling(period).mean()
+
+    plus_di = 100 * (plus_dm.rolling(period).mean() / atr)
+    minus_di = 100 * (minus_dm.rolling(period).mean() / atr)
+    dx = 100 * abs(plus_di - minus_di) / (plus_di + minus_di)
+    adx = dx.rolling(period).mean()
+    return adx.iloc[-1] if not pd.isna(adx.iloc[-1]) else 0
+
+def is_good_trading_session():
+    hour = datetime.datetime.utcnow().hour
+    london = 7 <= hour < 16
+    new_york = 12 <= hour < 21
+    return london or new_york
+
+def detect_fair_value_gap(df, direction, has_ohlc=True):
+    if len(df) < 3:
+        return False
+    if has_ohlc:
+        c1_high, c1_low = df["high"].iloc[-3], df["low"].iloc[-3]
+        c3_high, c3_low = df["high"].iloc[-1], df["low"].iloc[-1]
+    else:
+        c1_high = c1_low = df["close"].iloc[-3]
+        c3_high = c3_low = df["close"].iloc[-1]
+
+    if direction == "BUY":
+        return c3_low > c1_high
+    else:
+        return c3_high < c1_low
+
 def calculate_trade_levels(direction, current_price, atr, swing_high, swing_low):
     if direction == "BUY":
         dist_to_support = current_price - swing_low
