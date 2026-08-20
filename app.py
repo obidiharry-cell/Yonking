@@ -592,43 +592,93 @@ def save_decisions_to_firestore(results_table):
 def check_previous_trades():
     docs = db.collection("trade_history").stream()
     results = []
+
     for doc in docs:
         trade = doc.to_dict()
-        pair = trade["pair"]
+
+        pair = trade.get("pair")
         outcome = trade.get("outcome", "OPEN")
+        decision = trade.get("decision", "WAIT")
+
+        # IMPORTANT:
+        # Never close OPEN trades using stale weekend prices.
+        if outcome == "OPEN" and market_closed:
+            results.append({
+                "Pair": pair,
+                "Timeframe": trade.get("timeframe", "Daily"),
+                "Decision": decision,
+                "Entry": trade.get("entry_price", "-"),
+                "Exit/Current": "-",
+                "Opened": trade.get("opened_at", trade.get("date", "-")),
+                "Closed": "OPEN",
+                "Status": "OPEN"
+            })
+            continue
+
+        # Only check live price when the market is open.
         if outcome == "OPEN":
             try:
                 if pair == "XAU/USD":
                     current_df = fetch_gold_history()
                 else:
-                    fs, ts = {"USD/JPY": ("USD", "JPY"), "GBP/USD": ("GBP", "USD"), "USD/CAD": ("USD", "CAD")}[pair]
+                    fs, ts = {
+                        "USD/JPY": ("USD", "JPY"),
+                        "GBP/USD": ("GBP", "USD"),
+                        "USD/CAD": ("USD", "CAD")
+                    }[pair]
+
                     current_df = fetch_daily_history(fs, ts)
+
                 current_price = current_df["close"].iloc[-1]
-            except:
+
+            except Exception:
                 continue
-            decision = trade["decision"]
-            sl = trade["stop_loss"]
-            tp = trade["take_profit"]
+
+            sl = trade.get("stop_loss")
+            tp = trade.get("take_profit")
+
+            if sl is None or tp is None:
+                continue
+
             if decision == "BUY":
-                if current_price >= tp: outcome = "WIN"
-                elif current_price <= sl: outcome = "LOSS"
-            else:
-                if current_price <= tp: outcome = "WIN"
-                elif current_price >= sl: outcome = "LOSS"
+                if current_price >= tp:
+                    outcome = "WIN"
+                elif current_price <= sl:
+                    outcome = "LOSS"
+
+            elif decision == "SELL":
+                if current_price <= tp:
+                    outcome = "WIN"
+                elif current_price >= sl:
+                    outcome = "LOSS"
+
+            # Save result ONLY when a real price has actually hit SL/TP.
             if outcome != "OPEN":
                 now_str = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
-                db.collection("trade_history").document(doc.id).update({"outcome": outcome, "closed_at": now_str, "exit_price": round(current_price, 5)})
+
+                db.collection("trade_history").document(doc.id).update({
+                    "outcome": outcome,
+                    "closed_at": now_str,
+                    "exit_price": round(current_price, 5)
+                })
+
                 trade["closed_at"] = now_str
                 trade["exit_price"] = round(current_price, 5)
+
             else:
-                trade["exit_price"] = round(current_price, 4)
+                trade["exit_price"] = round(current_price, 5)
+
         results.append({
-            "Pair": pair, "Timeframe": trade.get("timeframe", "Daily"), "Decision": trade["decision"],
-            "Entry": trade["entry_price"], "Exit/Current": trade.get("exit_price", "-"),
+            "Pair": pair,
+            "Timeframe": trade.get("timeframe", "Daily"),
+            "Decision": decision,
+            "Entry": trade.get("entry_price", "-"),
+            "Exit/Current": trade.get("exit_price", "-"),
             "Opened": trade.get("opened_at", trade.get("date", "-")),
             "Closed": trade.get("closed_at", "OPEN") if outcome != "OPEN" else "OPEN",
             "Status": outcome
         })
+
     return results
 
 now_utc = datetime.datetime.utcnow()
@@ -757,13 +807,19 @@ if past_results:
 else:
     st.write("No trade history yet - results will appear here after your first analysis run.")
 
-if st.session_state.results_table is None:
+if st.session_state.results_table is None and not market_closed:
     with st.spinner("Running YonKing's full analysis automatically..."):
         run_full_analysis()
 
+elif st.session_state.results_table is None and market_closed:
+    st.info("⏸️ YonKing analysis is paused because the market is closed. No new paper trades will be created.")
+
 if st.button("🔄 Refresh Analysis"):
-    with st.spinner("Refreshing..."):
-        run_full_analysis()
+    if market_closed:
+        st.warning("⏸️ Market is closed. YonKing will not create a new trade from stale weekend prices.")
+    else:
+        with st.spinner("Refreshing..."):
+            run_full_analysis()
 
 if st.session_state.results_table is not None:
     st.subheader(f"News Sentiment: {st.session_state.news_bias}")
