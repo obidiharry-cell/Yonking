@@ -17,7 +17,7 @@ import json
 st.set_page_config(page_title="YonKing", page_icon="📈", layout="wide")
 
 # -------------------------
-# Secrets 
+# Secrets
 # -------------------------
 NEWS_API_KEY = st.secrets["NEWS_API_KEY"]
 GROQ_KEY = st.secrets["GROQ_KEY"]
