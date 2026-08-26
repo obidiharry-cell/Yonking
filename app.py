@@ -412,27 +412,160 @@ def trade_history():
     return out
 
 # ===================== INTRADAY STRICT =====================
-def adx(df,period=14):
-    if df is None or len(df)<period*2:return 0
-    h=df.high;l=df.low;c=df.close; up=h.diff();down=-l.diff(); plus=up.where((up>down)&(up>0),0);minus=down.where((down>up)&(down>0),0)
-    tr=pd.concat([h-l,(h-c.shift()).abs(),(l-c.shift()).abs()],axis=1).max(axis=1); a=tr.rolling(period).mean().replace(0,np.nan)
-    p=100*plus.rolling(period).mean()/a;m=100*minus.rolling(period).mean()/a;dx=100*(p-m).abs()/(p+m).replace(0,np.nan);v=dx.rolling(period).mean().iloc[-1]
-    return float(v) if pd.notna(v) else 0
 
-def intraday_signal(pair,interval,daily_dir,news):
-    df=fetch_intraday(SYMBOLS[pair],interval,300)
-    f=build_features(df,True)
-    if f is None:return "WAIT",None,None,None,0
-    price=float(f.close.iloc[-1]); atrv=float(f.atr.iloc[-1]); atravg=float(f.atr.tail(20).mean()); ma5=f.close.rolling(5).mean().iloc[-1];ma20=f.close.rolling(20).mean().iloc[-1];rsi=float(f.rsi.iloc[-1]);mh=float(f.macd_hist.iloc[-1]); candidate="BUY" if ma5>ma20 else "SELL"
-    a=adx(f); sweep=False;retest=False
-    if len(f)>=30:
-        recent=f.iloc[-25:-1]; cur=f.iloc[-1]; ph=recent.high.iloc[:-1].max();pl=recent.low.iloc[:-1].min(); sweep=(recent.high.iloc[-1]>ph and cur.close<ph) or (recent.low.iloc[-1]<pl and cur.close>pl)
-        avg=f.close.diff().abs().tail(20).mean(); retest=avg>0 and (f.close.tail(5).max()-f.close.tail(5).min())<avg*2
-    fvg=(f.high.iloc[-3]<f.low.iloc[-1]) if candidate=="BUY" else (f.low.iloc[-3]>f.high.iloc[-1])
-    swingh=float(f.swing_high_20.iloc[-1]);swingl=float(f.swing_low_20.iloc[-1]);bos=(candidate=="BUY" and price>swingh*.999) or (candidate=="SELL" and price<swingl*1.001)
-    score=0
-    score+=15 if daily_dir==candidate else 0;score+=15 if bos else 0;score+=15 if (retest or fvg) else 0;score+=10 if atrv>atravg else 0;score+=10 if ((candidate=="BUY" and mh>0) or (candidate=="SELL" and mh<0)) else 0;score+=10 if 45<=rsi<=65 else 0;score+=10 if a>=20 else 0;score+=5 if (7<=datetime.datetime.utcnow().hour<16 or 12<=datetime.datetime.utcnow().hour<21) else 0;score+=10 if ((candidate=="BUY" and news["buy"]>news["sell"]) or (candidate=="SELL" and news["sell"]>news["buy"])) else 0
-    return (candidate if score>=70 else "WAIT"),price,atrv,(swingh,swingl),score
+def adx(df, period=14):
+    if df is None or len(df) < period * 2:
+        return 0
+
+    h = df.high
+    l = df.low
+    c = df.close
+
+    up = h.diff()
+    down = -l.diff()
+
+    plus = up.where((up > down) & (up > 0), 0)
+    minus = down.where((down > up) & (down > 0), 0)
+
+    tr = pd.concat([
+        h - l,
+        (h - c.shift()).abs(),
+        (l - c.shift()).abs()
+    ], axis=1).max(axis=1)
+
+    atr = tr.rolling(period).mean().replace(0, np.nan)
+
+    p = 100 * plus.rolling(period).mean() / atr
+    m = 100 * minus.rolling(period).mean() / atr
+
+    dx = 100 * (p - m).abs() / (p + m).replace(0, np.nan)
+
+    value = dx.rolling(period).mean().iloc[-1]
+
+    return float(value) if pd.notna(value) else 0
+
+
+def intraday_signal(pair, interval, daily_dir, news):
+
+    df = fetch_intraday(
+        SYMBOLS[pair],
+        interval,
+        300
+    )
+
+    if df is None or df.empty:
+        return "WAIT", None, None, None, 0
+
+    f = build_features(df, True)
+
+    if f is None or f.empty:
+        return "WAIT", None, None, None, 0
+
+    price = float(f.close.iloc[-1])
+    atrv = float(f.atr.iloc[-1])
+    atravg = float(f.atr.tail(20).mean())
+
+    ma5 = f.close.rolling(5).mean().iloc[-1]
+    ma20 = f.close.rolling(20).mean().iloc[-1]
+
+    rsi = float(f.rsi.iloc[-1])
+    mh = float(f.macd_hist.iloc[-1])
+
+    candidate = "BUY" if ma5 > ma20 else "SELL"
+
+    a = adx(f)
+
+    sweep = False
+    retest = False
+
+    if len(f) >= 30:
+        recent = f.iloc[-25:-1]
+        cur = f.iloc[-1]
+
+        ph = recent.high.iloc[:-1].max()
+        pl = recent.low.iloc[:-1].min()
+
+        sweep = (
+            (recent.high.iloc[-1] > ph and cur.close < ph)
+            or
+            (recent.low.iloc[-1] < pl and cur.close > pl)
+        )
+
+        avg = f.close.diff().abs().tail(20).mean()
+
+        retest = (
+            avg > 0
+            and
+            (f.close.tail(5).max() - f.close.tail(5).min()) < avg * 2
+        )
+
+    if candidate == "BUY":
+        fvg = f.high.iloc[-3] < f.low.iloc[-1]
+    else:
+        fvg = f.low.iloc[-3] > f.high.iloc[-1]
+
+    swingh = float(f.swing_high_20.iloc[-1])
+    swingl = float(f.swing_low_20.iloc[-1])
+
+    bos = (
+        (candidate == "BUY" and price > swingh * 0.999)
+        or
+        (candidate == "SELL" and price < swingl * 1.001)
+    )
+
+    score = 0
+
+    if daily_dir == candidate:
+        score += 15
+
+    if bos:
+        score += 15
+
+    if retest or fvg:
+        score += 15
+
+    if atrv > atravg:
+        score += 10
+
+    if (
+        (candidate == "BUY" and mh > 0)
+        or
+        (candidate == "SELL" and mh < 0)
+    ):
+        score += 10
+
+    if 45 <= rsi <= 65:
+        score += 10
+
+    if a >= 20:
+        score += 10
+
+    utc_hour = datetime.datetime.utcnow().hour
+
+    if (
+        7 <= utc_hour < 16
+        or
+        12 <= utc_hour < 21
+    ):
+        score += 5
+
+    if (
+        (candidate == "BUY" and news["buy"] > news["sell"])
+        or
+        (candidate == "SELL" and news["sell"] > news["buy"])
+    ):
+        score += 10
+
+    decision = candidate if score >= 70 else "WAIT"
+
+    return (
+        decision,
+        price,
+        atrv,
+        (swingh, swingl),
+        score
+    )
+
 
 # ===================== BACKTEST - SIDEBAR ONLY =====================
 def backtest(pair,interval):
@@ -551,8 +684,7 @@ if history:
         return [""]*len(row)
     st.dataframe(hdf.style.apply(status_style,axis=1),use_container_width=True)
 else:st.write("No paper-trade history yet.")
-
-if st.session_state.results_tablei is not None:
+if st.session_state.results_table is not None:
     st.divider();st.subheader("🎯 YonKing Current Decisions")
     st.dataframe(pd.DataFrame(st.session_state.results_table),use_container_width=True)
     st.info("Only decisions at or above the 70% evidence threshold are eligible for BUY/SELL. 70% is not a guaranteed future win rate.")
