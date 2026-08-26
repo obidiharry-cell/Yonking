@@ -209,7 +209,7 @@ def build_features(df, ohlc=True):
     x["ma_20"] = x["close"].rolling(20).mean()
     x["ma_diff"] = (x["ma_5"] - x["ma_20"]) / x["close"]
     delta = x["close"].diff()
-    gain = delta.clip(lower=0).rolling(14).mean()
+    gain = delta.clip(loelseling(14).mean()
     loss = (-delta.clip(upper=0)).rolling(14).mean()
     x["rsi"] = 100 - 100 / (1 + gain / loss.replace(0, np.nan))
     if ohlc:
@@ -391,8 +391,8 @@ def trade_history():
         if outcome=="OPEN" and MARKET_OPEN:
             try:
                if"XAU/USD": df=fetch_gold_history()
-                else:
-                    a,b=CURRENCY_PAIRS[pair]; df=fetch_daily_history(a,b)
+else:
+    a,b=CURRENCY_PAIRS[pair]; df=fetch_daily_history(a,b)
                 price=float(df.close.iloc[-1]) if df is not None else None
                 sl=float(t["stop_loss"]); tp=float(t["take_profit"]); d=t["decision"]
                 if price is not None:
