@@ -27,12 +27,15 @@ TWELVE_KEY = st.secrets["TWELVE_KEY"]
 # -------------------------
 # Firebase
 # -------------------------
-if not firebase_admin._apps:
-    firebase_key_dict = json.loads(st.secrets["FIREBASE_KEY"])
-    cred = credentials.Certificate(firebase_key_dict)
-    firebase_admin.initialize_app(cred)
+firebase_key_dict = json.loads(st.secrets["FIREBASE_KEY"])
+cred = credentials.Certificate(firebase_key_dict)
 
-db = firestore.client()
+try:
+    firebase_app = firebase_admin.get_app("yonking")
+except ValueError:
+    firebase_app = firebase_admin.initialize_app(cred, name="yonking")
+
+db = firestore.client(app=firebase_app)
 
 ADMIN_EMAIL = "obidiharry@gmail.com"
 
