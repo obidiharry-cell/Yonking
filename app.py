@@ -390,7 +390,7 @@ def trade_history():
         # NEVER close trades from stale weekend prices.
         if outcome=="OPEN" and MARKET_OPEN:
             try:
-                if pair=="XAU/USD": df=fetch_gold_history()
+               if"XAU/USD": df=fetch_gold_history()
                 else:
                     a,b=CURRENCY_PAIRS[pair]; df=fetch_daily_history(a,b)
                 price=float(df.close.iloc[-1]) if df is not None else None
@@ -513,7 +513,29 @@ def run_analysis():
     st.session_state.results_table=rows;st.session_state.headlines=headlines;st.session_state.news_data=news
     save_trades(rows)
 
-if st.session_state.results_table is None:
+if st.session_state.results_table is not None:
+    st.divider()
+    st.subheader("🎯 YonKing Current Decisions")
+    st.dataframe(pd.DataFrame(st.session_state.results_table), use_container_width=True)
+
+    st.info(
+        "Only decisions at or above the 70% evidence threshold are eligible "
+        "for BUY/SELL. 70% is not a guaranteed future win rate."
+    )
+
+    st.divider()
+    st.subheader("📰 News Evidence")
+
+    for pair in PAIRS:
+        n = st.session_state.news_data.get(
+            pair, {"buy": 50, "sell": 50}
+        )
+        st.write(
+            f"**{pair}: BUY {n['buy']:.1f}% | SELL {n['sell']:.1f}%**"
+        )
+
+    st.divider()
+    st.subheader("📊 YonKing's Calculated Chart View")
     with st.spinner("Running YonKing analysis..."):run_analysis()
 if st.button("🔄 Refresh Analysis",use_container_width=True):
     with st.spinner("Refreshing..."):run_analysis()
